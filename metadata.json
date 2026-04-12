@@ -1,0 +1,5 @@
+{
+  "name": "Watchtower Study Assistant",
+  "description": "A tool for Jehovah's Witnesses to prepare for the weekly Watchtower study by generating and editing comments based on article paragraphs.",
+  "requestFramePermissions": []
+}
