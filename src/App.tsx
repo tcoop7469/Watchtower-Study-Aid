@@ -28,7 +28,9 @@ import {
   Plus,
   Image as ImageIcon,
   Type,
-  X
+  X,
+  Pin,
+  PinOff
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -51,6 +53,9 @@ export default function App() {
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
   const [collapsedSuggestions, setCollapsedSuggestions] = useState<Set<string>>(new Set());
   const [collapsedNotes, setCollapsedNotes] = useState<Set<string>>(new Set());
+  const [pinnedSuggestions, setPinnedSuggestions] = useState<Set<string>>(new Set());
+  const [selectedScripture, setSelectedScripture] = useState<{ reference: string; text: string } | null>(null);
+  const [activeTab, setActiveTab] = useState("study");
 
   // Initialize theme from system preference or local storage
   useEffect(() => {
@@ -197,6 +202,15 @@ export default function App() {
     });
   };
 
+  const togglePin = (id: string) => {
+    setPinnedSuggestions(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   const toggleNote = (id: string) => {
     setCollapsedNotes(prev => {
       const next = new Set(prev);
@@ -281,6 +295,7 @@ export default function App() {
     setError(null);
     setCollapsedSuggestions(new Set());
     setCollapsedNotes(new Set());
+    setPinnedSuggestions(new Set());
   };
 
   const formatText = (content: React.ReactNode, search: string, formatter: (match: string, index: number) => React.ReactNode): React.ReactNode => {
@@ -330,18 +345,33 @@ export default function App() {
       ));
     }
     
-    // 2. Read Scriptures (Blue highlight + Bold)
-    item.readScriptures.forEach((s, sIdx) => {
+    // 2. Read Scriptures (Blue highlight + Bold) - Sort by length descending to avoid partial matches
+    const sortedRead = [...item.readScriptures].sort((a, b) => b.length - a.length);
+    sortedRead.forEach((s, sIdx) => {
       content = formatText(content, s, (match, i) => (
-        <span key={`read-${sIdx}-${i}`} className="bg-blue-300 dark:bg-blue-800 text-foreground not-italic font-bold px-1 rounded shadow-sm">
+        <span 
+          key={`read-${sIdx}-${i}`} 
+          className="bg-blue-300 dark:bg-blue-800 text-foreground not-italic font-bold px-1 rounded shadow-sm cursor-pointer hover:bg-blue-400 dark:hover:bg-blue-700 transition-colors"
+          onClick={() => {
+            // Try exact match first, then partial match
+            let scripture = item.scriptureTexts.find(st => st.reference === match);
+            if (!scripture) {
+              scripture = item.scriptureTexts.find(st => st.reference.includes(match) || match.includes(st.reference));
+            }
+            if (scripture) setSelectedScripture(scripture);
+          }}
+        >
           {match}
         </span>
       ));
     });
     
-    // 3. Other Scriptures (Bold)
-    item.scriptures.forEach((s, sIdx) => {
-      if (item.readScriptures.includes(s)) return;
+    // 3. Other Scriptures (Bold) - Sort by length descending
+    const sortedOther = item.scriptures
+      .filter(s => !item.readScriptures.includes(s))
+      .sort((a, b) => b.length - a.length);
+      
+    sortedOther.forEach((s, sIdx) => {
       content = formatText(content, s, (match, i) => (
         <span key={`scripture-${sIdx}-${i}`} className="font-bold not-italic text-primary/90">
           {match}
@@ -353,71 +383,113 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground font-sans selection:bg-primary/20 transition-colors duration-300">
-      {/* Header */}
-      <header className="sticky top-0 z-10 bg-background/80 backdrop-blur-md border-b border-border px-6 py-4">
-        <div className="max-w-4xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-primary-foreground shadow-lg shadow-primary/20">
-              <BookOpen size={22} />
-            </div>
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight">Watchtower Study Assistant</h1>
-              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Preparation Tool</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="file"
-              id="import-data"
-              className="hidden"
-              accept=".json"
-              onChange={handleImportData}
-            />
+    <div className="min-h-screen bg-background text-foreground font-sans selection:bg-primary/20 transition-colors duration-300 flex">
+      {/* Sidebar Navigation */}
+      <aside className="fixed left-0 top-0 bottom-0 w-16 md:w-20 bg-card border-r border-border flex flex-col items-center py-8 z-30">
+        <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-primary-foreground shadow-lg shadow-primary/20 mb-12">
+          <BookOpen size={22} />
+        </div>
+        
+        {article && (
+          <nav className="flex flex-col gap-4">
+            {[
+              { id: "study", icon: Layout, label: "Study" },
+              { id: "article", icon: FileText, label: "Article" },
+              { id: "scriptures", icon: BookOpen, label: "Scriptures" }
+            ].map((nav) => (
+              <button
+                key={nav.id}
+                onClick={() => setActiveTab(nav.id)}
+                className={cn(
+                  "p-3 rounded-xl transition-all duration-200 group relative",
+                  activeTab === nav.id 
+                    ? "bg-primary text-primary-foreground shadow-md shadow-primary/20" 
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                )}
+                title={nav.label}
+              >
+                <nav.icon size={22} />
+                <span className="absolute left-full ml-4 px-2 py-1 rounded bg-popover text-popover-foreground text-xs font-medium opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap shadow-md z-50">
+                  {nav.label}
+                </span>
+                {activeTab === nav.id && (
+                  <motion.div 
+                    layoutId="active-indicator"
+                    className="absolute -right-[2px] top-1/4 bottom-1/4 w-1 bg-primary rounded-l-full"
+                  />
+                )}
+              </button>
+            ))}
+          </nav>
+        )}
+
+        <div className="mt-auto flex flex-col gap-4">
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            onClick={toggleDarkMode}
+            className="rounded-full hover:bg-muted"
+            title="Toggle Theme"
+          >
+            {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="rounded-full hover:bg-muted"
+            onClick={() => document.getElementById('import-data')?.click()}
+            title="Import Article"
+          >
+            <Upload size={20} />
+          </Button>
+          {article && (
             <Button
               variant="ghost"
               size="icon"
               className="rounded-full hover:bg-muted"
-              onClick={() => document.getElementById('import-data')?.click()}
-              title="Import Study Data"
+              onClick={handleExport}
+              title="Export Study Data"
             >
-              <Upload size={20} />
+              <Download size={20} />
             </Button>
-            {article && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="rounded-full hover:bg-muted"
-                onClick={handleExport}
-                title="Export Study Data"
-              >
-                <Download size={20} />
-              </Button>
-            )}
-            <Button 
-              variant="ghost" 
-              size="icon" 
-              onClick={toggleDarkMode}
-              className="rounded-full hover:bg-muted"
-            >
-              {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
-            </Button>
-            {article && (
-              <>
-                <Button variant="outline" size="sm" onClick={copyAllComments} className="hidden sm:flex gap-2 border-border hover:bg-muted">
-                  {copiedId === "all" ? <Check size={14} /> : <Copy size={14} />}
-                  {copiedId === "all" ? "Copied All" : "Copy All"}
-                </Button>
-                <Button variant="ghost" size="sm" onClick={reset} className="text-destructive hover:text-destructive hover:bg-destructive/10">
-                  <Trash2 size={14} />
-                </Button>
-              </>
-            )}
-          </div>
+          )}
         </div>
-      </header>
+      </aside>
 
-      <main className="max-w-4xl mx-auto p-6 pb-24">
+      <div className="flex-1 flex flex-col min-w-0 transition-all duration-300 pl-16 md:pl-20">
+        {/* Header */}
+        <header className="sticky top-0 z-10 bg-background/80 backdrop-blur-md border-b border-border px-6 py-4">
+          <div className="max-w-4xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div>
+                <h1 className="text-xl font-semibold tracking-tight">Watchtower Study Assistant</h1>
+                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Preparation Tool</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="file"
+                id="import-data"
+                className="hidden"
+                accept=".json"
+                onChange={handleImportData}
+              />
+              {article && (
+                <>
+                  <Button variant="outline" size="sm" onClick={copyAllComments} className="hidden sm:flex gap-2 border-border hover:bg-muted">
+                    {copiedId === "all" ? <Check size={14} /> : <Copy size={14} />}
+                    {copiedId === "all" ? "Copied All" : "Copy All"}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={reset} className="text-destructive hover:text-destructive hover:bg-destructive/10">
+                    <Trash2 size={14} />
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+        </header>
+
+        <main className="max-w-4xl mx-auto w-full p-6 pb-24">
         <AnimatePresence mode="wait">
           {!article && !isLoading ? (
             <motion.div
@@ -514,24 +586,7 @@ export default function App() {
                 </div>
               </div>
 
-              <Tabs defaultValue="study" className="w-full">
-                <div className="flex justify-center mb-8">
-                  <TabsList className="bg-muted p-1 rounded-xl">
-                    <TabsTrigger value="study" className="rounded-lg gap-2 px-6">
-                      <Layout size={16} />
-                      Study
-                    </TabsTrigger>
-                    <TabsTrigger value="article" className="rounded-lg gap-2 px-6">
-                      <FileText size={16} />
-                      Article
-                    </TabsTrigger>
-                    <TabsTrigger value="scriptures" className="rounded-lg gap-2 px-6">
-                      <BookOpen size={16} />
-                      Scriptures
-                    </TabsTrigger>
-                  </TabsList>
-                </div>
-
+              <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
                 <TabsContent value="study" className="space-y-6 outline-none">
                   {article?.items.map((item, index) => (
                     <motion.div
@@ -579,10 +634,23 @@ export default function App() {
                           </div>
                           <div className="space-y-4">
                             <div className="space-y-2">
-                              <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-                                <User size={12} className="text-primary" />
-                                My Comment
-                              </label>
+                              <div className="flex items-center justify-between">
+                                <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+                                  <User size={12} className="text-primary" />
+                                  My Comment
+                                </label>
+                                {!pinnedSuggestions.has(item.id) && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 px-2 text-[10px] font-bold uppercase tracking-widest gap-1.5 hover:bg-amber-500/10 hover:text-amber-600 transition-colors"
+                                    onClick={() => toggleSuggestion(item.id)}
+                                  >
+                                    <Sparkles size={10} className="text-amber-500" />
+                                    {collapsedSuggestions.has(item.id) ? "Show AI Suggestion" : "Hide AI Suggestion"}
+                                  </Button>
+                                )}
+                              </div>
                               <Textarea
                                 value={item.userComment}
                                 onChange={(e) => handleUpdateComment(item.id, e.target.value)}
@@ -591,46 +659,75 @@ export default function App() {
                               />
                             </div>
 
-                            <div className="border border-border rounded-xl overflow-hidden bg-muted/30">
-                              <button 
-                                onClick={() => toggleSuggestion(item.id)}
-                                className="w-full px-4 py-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:bg-muted/50 transition-colors"
-                              >
-                                <div className="flex items-center gap-2">
-                                  <Sparkles size={12} className="text-amber-500" />
-                                  AI Suggested Comment
-                                </div>
-                                {collapsedSuggestions.has(item.id) ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-                              </button>
-                              
-                              <AnimatePresence>
-                                {!collapsedSuggestions.has(item.id) && (
-                                  <motion.div
-                                    initial={{ height: 0, opacity: 0 }}
-                                    animate={{ height: "auto", opacity: 1 }}
-                                    exit={{ height: 0, opacity: 0 }}
-                                    className="overflow-hidden"
+                              <div className={cn(
+                                "border rounded-xl overflow-hidden transition-all duration-300",
+                                pinnedSuggestions.has(item.id) 
+                                  ? "border-amber-500/30 bg-amber-500/5 shadow-md shadow-amber-500/5" 
+                                  : "border-border bg-muted/30"
+                              )}>
+                                <div className="flex items-center justify-between px-4 py-1.5 bg-muted/20 border-b border-border/10">
+                                  <button 
+                                    onClick={() => toggleSuggestion(item.id)}
+                                    className="flex-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground hover:text-foreground transition-colors text-left"
                                   >
-                                    <div className="p-4 pt-0 space-y-3">
-                                      <div className="p-3 rounded-lg bg-background border border-border text-sm leading-relaxed text-foreground/80">
-                                        {item.suggestedComment}
+                                    <Sparkles size={12} className={cn(
+                                      pinnedSuggestions.has(item.id) ? "text-amber-600" : "text-amber-500/60"
+                                    )} />
+                                    AI Suggested Comment
+                                    {pinnedSuggestions.has(item.id) && (
+                                      <span className="bg-amber-500/20 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded text-[8px] tracking-tighter ml-1">PINNED</span>
+                                    )}
+                                  </button>
+                                  <div className="flex items-center gap-1">
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className={cn(
+                                        "h-6 w-6 rounded-full transition-colors",
+                                        pinnedSuggestions.has(item.id) ? "text-amber-600 bg-amber-500/20" : "text-muted-foreground hover:bg-muted"
+                                      )}
+                                      onClick={() => togglePin(item.id)}
+                                      title={pinnedSuggestions.has(item.id) ? "Unpin Suggestion" : "Pin Suggestion"}
+                                    >
+                                      {pinnedSuggestions.has(item.id) ? <PinOff size={12} /> : <Pin size={12} />}
+                                    </Button>
+                                    <button
+                                      onClick={() => toggleSuggestion(item.id)}
+                                      className="p-1 text-muted-foreground hover:text-foreground"
+                                    >
+                                      {collapsedSuggestions.has(item.id) ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                                    </button>
+                                  </div>
+                                </div>
+                                
+                                <AnimatePresence>
+                                  {(pinnedSuggestions.has(item.id) || !collapsedSuggestions.has(item.id)) && (
+                                    <motion.div
+                                      initial={pinnedSuggestions.has(item.id) ? { height: "auto", opacity: 1 } : { height: 0, opacity: 0 }}
+                                      animate={{ height: "auto", opacity: 1 }}
+                                      exit={{ height: 0, opacity: 0 }}
+                                      className="overflow-hidden"
+                                    >
+                                      <div className="p-4 space-y-3">
+                                        <div className="p-3 rounded-lg bg-background/80 border border-border/50 text-sm leading-relaxed text-foreground/80 shadow-sm">
+                                          {item.suggestedComment}
+                                        </div>
+                                        <div className="flex justify-end">
+                                          <Button 
+                                            variant="outline" 
+                                            size="sm" 
+                                            className="text-[10px] h-7 px-2 gap-1.5 border-border hover:bg-primary hover:text-primary-foreground"
+                                            onClick={() => copySuggestionToUser(item.id, item.suggestedComment)}
+                                          >
+                                            <Copy size={10} />
+                                            Use this suggestion
+                                          </Button>
+                                        </div>
                                       </div>
-                                      <div className="flex justify-end">
-                                        <Button 
-                                          variant="outline" 
-                                          size="sm" 
-                                          className="text-[10px] h-7 px-2 gap-1.5 border-border hover:bg-primary hover:text-primary-foreground"
-                                          onClick={() => copySuggestionToUser(item.id, item.suggestedComment)}
-                                        >
-                                          <Copy size={10} />
-                                          Use this suggestion
-                                        </Button>
-                                      </div>
-                                    </div>
-                                  </motion.div>
-                                )}
-                              </AnimatePresence>
-                            </div>
+                                    </motion.div>
+                                  )}
+                                </AnimatePresence>
+                              </div>
 
                             {/* Additional Notes Section */}
                             <div className="space-y-4 pt-2">
@@ -846,11 +943,68 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="fixed bottom-0 left-0 right-0 bg-background/80 backdrop-blur-md border-t border-border p-4 text-center">
+      <footer className={cn("fixed bottom-0 right-0 bg-background/80 backdrop-blur-md border-t border-border p-4 text-center z-20", article ? "left-16 md:left-20" : "left-0")}>
         <p className="text-[10px] text-muted-foreground uppercase tracking-[0.2em] font-medium">
           "Study to show thyself approved"
         </p>
       </footer>
+
+      {/* Scripture Popup */}
+      <AnimatePresence>
+        {selectedScripture && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSelectedScripture(null)}
+              className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-lg bg-card border border-border rounded-2xl shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400">
+                      <BookOpen size={18} />
+                    </div>
+                    <h3 className="text-lg font-bold text-foreground">{selectedScripture.reference}</h3>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="rounded-full h-8 w-8 hover:bg-muted"
+                    onClick={() => setSelectedScripture(null)}
+                  >
+                    <X size={18} />
+                  </Button>
+                </div>
+                <Separator className="bg-border" />
+                <ScrollArea className="max-h-[60vh]">
+                  <p className="text-lg leading-relaxed text-foreground italic font-serif p-1">
+                    "{selectedScripture.text}"
+                  </p>
+                </ScrollArea>
+                <div className="pt-2 flex justify-end">
+                  <Button 
+                    variant="secondary" 
+                    size="sm" 
+                    onClick={() => setSelectedScripture(null)}
+                    className="rounded-full px-6"
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+      </div>
     </div>
   );
 }

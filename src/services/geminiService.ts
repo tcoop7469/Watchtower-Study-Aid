@@ -11,10 +11,12 @@ The comment should sound natural, as if spoken by a person in a congregation mee
 Avoid overly long comments; aim for 2-3 sentences.
 
 CRITICAL:
-- Identify ALL Bible scripture references in each paragraph (e.g., 'Matthew 24:14', 'Rev. 21:3, 4').
+- Identify EVERY Bible scripture reference in each paragraph (e.g., 'Matthew 24:14', 'Rev. 21:3, 4', 'John 3:16, 17').
 - Specifically identify which of these are 'Read' scriptures (usually preceded by the word 'Read').
-- For each scripture reference found, provide its full text using the New World Translation of the Holy Scriptures (2013 Revision).
+- For EVERY scripture reference listed in 'scriptures' or 'readScriptures', you MUST provide its corresponding full text in the 'scriptureTexts' array.
+- Use the New World Translation of the Holy Scriptures (2013 Revision) for all scripture texts.
 - Ensure that 'highlightedText', 'scriptures', and 'readScriptures' are EXACT substrings from the paragraph text provided.
+- If a reference covers multiple verses (e.g., 'John 3:16, 17'), treat it as a single string in the arrays.
 - Ensure the output is a valid JSON object matching the requested schema.
 `;
 
