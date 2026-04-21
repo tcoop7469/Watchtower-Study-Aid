@@ -14,6 +14,8 @@ CRITICAL:
 - Identify EVERY Bible scripture reference in each paragraph (e.g., 'Matthew 24:14', 'Rev. 21:3, 4', 'John 3:16, 17').
 - Specifically identify which of these are 'Read' scriptures (usually preceded by the word 'Read').
 - For EVERY scripture reference listed in 'scriptures' or 'readScriptures', you MUST provide its corresponding full text in the 'scriptureTexts' array.
+- Identify the summary review questions at the end of the article (usually in a section called 'How Would You Answer?' or similar review box).
+- For each review question, generate a summary comment that answers the question based on the content of the entire article.
 - Use the New World Translation of the Holy Scriptures (2013 Revision) for all scripture texts.
 - Ensure that 'highlightedText', 'scriptures', and 'readScriptures' are EXACT substrings from the paragraph text provided.
 - If a reference covers multiple verses (e.g., 'John 3:16, 17'), treat it as a single string in the arrays.
@@ -67,9 +69,22 @@ export async function processArticle(text: string): Promise<WatchtowerArticle> {
               },
               required: ["id", "question", "paragraph", "highlightedText", "scriptures", "readScriptures", "scriptureTexts", "suggestedComment", "userComment"]
             }
+          },
+          reviewQuestions: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING, description: "A unique ID for the review question (e.g., 'rq1')" },
+                question: { type: Type.STRING, description: "The review question text" },
+                suggestedComment: { type: Type.STRING, description: "A suggested summary comment answering the review question" },
+                userComment: { type: Type.STRING, description: "Initially an empty string" }
+              },
+              required: ["id", "question", "suggestedComment", "userComment"]
+            }
           }
         },
-        required: ["title", "items"]
+        required: ["title", "items", "reviewQuestions"]
       }
     }
   });

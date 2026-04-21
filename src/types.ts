@@ -22,8 +22,16 @@ export interface StudyItem {
   additionalNotes?: AdditionalNote[];
 }
 
+export interface ReviewQuestion {
+  id: string;
+  question: string;
+  suggestedComment: string;
+  userComment: string;
+}
+
 export interface WatchtowerArticle {
   title: string;
   items: StudyItem[];
+  reviewQuestions: ReviewQuestion[];
   originalText: string;
 }

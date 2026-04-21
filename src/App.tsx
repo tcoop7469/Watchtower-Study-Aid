@@ -105,6 +105,9 @@ export default function App() {
       ...article,
       items: article.items.map(item => 
         item.id === id ? { ...item, userComment: newComment } : item
+      ),
+      reviewQuestions: article.reviewQuestions.map(q => 
+        q.id === id ? { ...q, userComment: newComment } : q
       )
     });
   };
@@ -169,7 +172,10 @@ export default function App() {
         
         // Basic validation
         if (importedArticle.title && Array.isArray(importedArticle.items)) {
-          setArticle(importedArticle);
+          setArticle({
+            ...importedArticle,
+            reviewQuestions: importedArticle.reviewQuestions || []
+          });
           setCollapsedSuggestions(new Set(importedArticle.items.map(item => item.id)));
           
           // Collapse all existing additional notes
@@ -226,6 +232,9 @@ export default function App() {
       ...article,
       items: article.items.map(item => 
         item.id === id ? { ...item, userComment: suggestion } : item
+      ),
+      reviewQuestions: article.reviewQuestions.map(q => 
+        q.id === id ? { ...q, userComment: suggestion } : q
       )
     });
   };
@@ -847,6 +856,72 @@ export default function App() {
                       </Card>
                     </motion.div>
                   ))}
+
+                  {article?.reviewQuestions && article.reviewQuestions.length > 0 && (
+                    <div className="mt-12 space-y-8">
+                      <div className="flex items-center gap-4">
+                        <Separator className="flex-1 bg-border" />
+                        <h3 className="text-sm font-bold uppercase tracking-[0.3em] text-primary whitespace-nowrap">
+                          How Would You Answer?
+                        </h3>
+                        <Separator className="flex-1 bg-border" />
+                      </div>
+                      
+                      {article.reviewQuestions.map((q, idx) => (
+                        <motion.div
+                          key={q.id}
+                          initial={{ opacity: 0, scale: 0.98 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          transition={{ delay: idx * 0.1 }}
+                        >
+                          <Card className="border-primary/20 bg-primary/5 shadow-md overflow-hidden">
+                            <CardHeader className="pb-3 border-b border-primary/10">
+                              <div className="flex items-start justify-between gap-4">
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-bold uppercase tracking-widest text-primary/70">Review Question {idx + 1}</span>
+                                  <CardTitle className="text-lg font-medium leading-snug">{q.question}</CardTitle>
+                                </div>
+                              </div>
+                            </CardHeader>
+                            <CardContent className="p-6 space-y-6">
+                              <div className="space-y-3">
+                                <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+                                  <User size={10} className="text-primary" />
+                                  My Summary Comment
+                                </label>
+                                <Textarea
+                                  value={q.userComment}
+                                  onChange={(e) => handleUpdateComment(q.id, e.target.value)}
+                                  className="min-h-[80px] bg-background border-border"
+                                  placeholder="Type your summary response here..."
+                                />
+                              </div>
+                              
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+                                    <Sparkles size={10} className="text-amber-500" />
+                                    AI Suggested Summary
+                                  </label>
+                                  <Button 
+                                    variant="ghost" 
+                                    size="sm" 
+                                    className="h-6 px-2 text-[8px] gap-1 hover:bg-muted"
+                                    onClick={() => copySuggestionToUser(q.id, q.suggestedComment)}
+                                  >
+                                    <Copy size={8} /> Use Suggestion
+                                  </Button>
+                                </div>
+                                <div className="p-4 rounded-xl bg-background border border-border/50 text-sm italic text-foreground/70 leading-relaxed shadow-inner">
+                                  {q.suggestedComment}
+                                </div>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        </motion.div>
+                      ))}
+                    </div>
+                  )}
                 </TabsContent>
 
                 <TabsContent value="article" className="outline-none">
