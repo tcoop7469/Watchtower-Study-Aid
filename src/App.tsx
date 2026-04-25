@@ -382,7 +382,18 @@ export default function App() {
       
     sortedOther.forEach((s, sIdx) => {
       content = formatText(content, s, (match, i) => (
-        <span key={`scripture-${sIdx}-${i}`} className="font-bold not-italic text-primary/90">
+        <span 
+          key={`scripture-${sIdx}-${i}`} 
+          className="font-bold not-italic text-primary/90 cursor-pointer hover:underline decoration-primary/30 underline-offset-2 transition-all"
+          onClick={() => {
+            // Try exact match first, then partial match
+            let scripture = item.scriptureTexts.find(st => st.reference === match);
+            if (!scripture) {
+              scripture = item.scriptureTexts.find(st => st.reference.includes(match) || match.includes(st.reference));
+            }
+            if (scripture) setSelectedScripture(scripture);
+          }}
+        >
           {match}
         </span>
       ));
@@ -1016,13 +1027,6 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
-
-      {/* Footer */}
-      <footer className={cn("fixed bottom-0 right-0 bg-background/80 backdrop-blur-md border-t border-border p-4 text-center z-20", article ? "left-16 md:left-20" : "left-0")}>
-        <p className="text-[10px] text-muted-foreground uppercase tracking-[0.2em] font-medium">
-          "Study to show thyself approved"
-        </p>
-      </footer>
 
       {/* Scripture Popup */}
       <AnimatePresence>
