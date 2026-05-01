@@ -13,12 +13,12 @@ Avoid overly long comments; aim for 2-3 sentences.
 CRITICAL:
 - Identify EVERY Bible scripture reference in each paragraph (e.g., 'Matthew 24:14', 'Rev. 21:3, 4', 'John 3:16, 17').
 - Specifically identify which of these are 'Read' scriptures (usually preceded by the word 'Read').
-- For EVERY scripture reference listed in 'scriptures' or 'readScriptures', you MUST provide its corresponding full text in the 'scriptureTexts' array.
+- For EVERY scripture reference listed in 'scriptures' or 'readScriptures', you MUST provide its corresponding full text in the 'scriptureTexts' array. If a reference includes a range of verses (e.g., 'Luke 17:31-35' or 'Matthew 24:14-16'), you MUST provide the full text for ALL verses within that range sequentially. Do not stop after the first verse.
 - Identify the summary review questions at the end of the article (usually in a section called 'How Would You Answer?' or similar review box).
 - For each review question, generate a summary comment that answers the question based on the content of the entire article.
 - Use the New World Translation of the Holy Scriptures (2013 Revision) for all scripture texts.
 - Ensure that 'highlightedText', 'scriptures', and 'readScriptures' are EXACT substrings from the paragraph text provided.
-- If a reference covers multiple verses (e.g., 'John 3:16, 17'), treat it as a single string in the arrays.
+- If a reference covers multiple verses (e.g., 'John 3:16, 17'), treat it as a single string in the arrays that includes the text of all verses.
 - Ensure the output is a valid JSON object matching the requested schema.
 `;
 

@@ -1043,47 +1043,53 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-lg bg-card border border-border rounded-2xl shadow-2xl overflow-hidden"
+              className="relative w-full max-w-lg max-h-[85vh] bg-card border border-border rounded-2xl shadow-2xl overflow-hidden flex flex-col"
             >
-              <div className="p-6 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400">
-                      <BookOpen size={18} />
-                    </div>
-                    <h3 className="text-lg font-bold text-foreground">{selectedScripture.reference}</h3>
+              {/* Header */}
+              <div className="p-6 pb-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400">
+                    <BookOpen size={18} />
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="rounded-full h-8 w-8 hover:bg-muted"
-                    onClick={() => setSelectedScripture(null)}
-                  >
-                    <X size={18} />
-                  </Button>
+                  <h3 className="text-lg font-bold text-foreground">{selectedScripture.reference}</h3>
                 </div>
-                <Separator className="bg-border" />
-                <ScrollArea className="max-h-[60vh]">
-                  <p className="text-lg leading-relaxed text-foreground italic font-serif p-1">
-                    "{selectedScripture.text}"
-                  </p>
-                </ScrollArea>
-                <div className="pt-2 flex justify-end">
-                  <Button 
-                    variant="secondary" 
-                    size="sm" 
-                    onClick={() => setSelectedScripture(null)}
-                    className="rounded-full px-6"
-                  >
-                    Close
-                  </Button>
-                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-full h-8 w-8 hover:bg-muted"
+                  onClick={() => setSelectedScripture(null)}
+                >
+                  <X size={18} />
+                </Button>
+              </div>
+              
+              <Separator className="mx-6 bg-border shrink-0" />
+              
+              {/* Content Area - This is what scrolls */}
+              <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0 custom-scrollbar">
+                <p className="text-lg leading-relaxed text-foreground italic font-serif">
+                  "{selectedScripture.text}"
+                </p>
+              </div>
+              
+              <Separator className="mx-6 bg-border shrink-0" />
+              
+              {/* Footer */}
+              <div className="p-6 pt-4 flex justify-end shrink-0">
+                <Button 
+                  variant="secondary" 
+                  size="sm" 
+                  onClick={() => setSelectedScripture(null)}
+                  className="rounded-full px-6"
+                >
+                  Close
+                </Button>
               </div>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
-      </div>
     </div>
-  );
+  </div>
+);
 }
