@@ -30,11 +30,15 @@ import {
   Type,
   X,
   Pin,
-  PinOff
+  PinOff,
+  Settings,
+  Sliders
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -56,8 +60,10 @@ export default function App() {
   const [pinnedSuggestions, setPinnedSuggestions] = useState<Set<string>>(new Set());
   const [selectedScripture, setSelectedScripture] = useState<{ reference: string; text: string } | null>(null);
   const [activeTab, setActiveTab] = useState("study");
+  const [fontSizeParagraph, setFontSizeParagraph] = useState(16);
+  const [fontSizeComment, setFontSizeComment] = useState(16);
 
-  // Initialize theme from system preference or local storage
+  // Initialize theme and font sizes from system preference or local storage
   useEffect(() => {
     const savedTheme = localStorage.getItem("theme");
     const systemPrefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -66,7 +72,21 @@ export default function App() {
       setIsDarkMode(true);
       document.documentElement.classList.add("dark");
     }
+
+    const savedPSize = localStorage.getItem("fontSizeParagraph");
+    if (savedPSize) setFontSizeParagraph(parseInt(savedPSize));
+
+    const savedCSize = localStorage.getItem("fontSizeComment");
+    if (savedCSize) setFontSizeComment(parseInt(savedCSize));
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem("fontSizeParagraph", fontSizeParagraph.toString());
+  }, [fontSizeParagraph]);
+
+  useEffect(() => {
+    localStorage.setItem("fontSizeComment", fontSizeComment.toString());
+  }, [fontSizeComment]);
 
   const toggleDarkMode = () => {
     setIsDarkMode(prev => {
@@ -415,7 +435,8 @@ export default function App() {
             {[
               { id: "study", icon: Layout, label: "Study" },
               { id: "article", icon: FileText, label: "Article" },
-              { id: "scriptures", icon: BookOpen, label: "Scriptures" }
+              { id: "scriptures", icon: BookOpen, label: "Scriptures" },
+              { id: "settings", icon: Settings, label: "Settings" }
             ].map((nav) => (
               <button
                 key={nav.id}
@@ -649,7 +670,7 @@ export default function App() {
                           </div>
                         </CardHeader>
                         <CardContent className="space-y-4">
-                          <div className="p-4 rounded-xl bg-muted/50 border border-border text-sm text-muted-foreground leading-relaxed italic">
+                          <div className="p-4 rounded-xl bg-muted/50 border border-border text-muted-foreground leading-relaxed italic" style={{ fontSize: `${fontSizeParagraph}px` }}>
                             {renderParagraph(item)}
                           </div>
                           <div className="space-y-4">
@@ -674,7 +695,8 @@ export default function App() {
                               <Textarea
                                 value={item.userComment}
                                 onChange={(e) => handleUpdateComment(item.id, e.target.value)}
-                                className="min-h-[100px] border-border focus-visible:ring-primary bg-background shadow-inner text-base"
+                                className="min-h-[100px] border-border focus-visible:ring-primary bg-background shadow-inner"
+                                style={{ fontSize: `${fontSizeComment}px` }}
                                 placeholder="Type your personal comment here..."
                               />
                             </div>
@@ -729,7 +751,7 @@ export default function App() {
                                       className="overflow-hidden"
                                     >
                                       <div className="p-4 space-y-3">
-                                        <div className="p-3 rounded-lg bg-background/80 border border-border/50 text-sm leading-relaxed text-foreground/80 shadow-sm">
+                                        <div className="p-3 rounded-lg bg-background/80 border border-border/50 leading-relaxed text-foreground/80 shadow-sm" style={{ fontSize: `${fontSizeComment}px` }}>
                                           {item.suggestedComment}
                                         </div>
                                         <div className="flex justify-end">
@@ -904,6 +926,7 @@ export default function App() {
                                   value={q.userComment}
                                   onChange={(e) => handleUpdateComment(q.id, e.target.value)}
                                   className="min-h-[80px] bg-background border-border"
+                                  style={{ fontSize: `${fontSizeComment}px` }}
                                   placeholder="Type your summary response here..."
                                 />
                               </div>
@@ -923,7 +946,7 @@ export default function App() {
                                     <Copy size={8} /> Use Suggestion
                                   </Button>
                                 </div>
-                                <div className="p-4 rounded-xl bg-background border border-border/50 text-sm italic text-foreground/70 leading-relaxed shadow-inner">
+                                <div className="p-4 rounded-xl bg-background border border-border/50 italic text-foreground/70 leading-relaxed shadow-inner" style={{ fontSize: `${fontSizeComment}px` }}>
                                   {q.suggestedComment}
                                 </div>
                               </div>
@@ -1009,6 +1032,69 @@ export default function App() {
                           ))}
                         </div>
                       </ScrollArea>
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+
+                <TabsContent value="settings" className="outline-none">
+                  <Card className="border-border bg-card shadow-xl shadow-primary/5">
+                    <CardHeader className="border-b border-border bg-muted/30">
+                      <CardTitle className="text-xl font-serif italic text-primary">Display Settings</CardTitle>
+                      <CardDescription>Customize the appearance of your study assistant.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-6 space-y-8">
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Sliders className="text-primary" size={18} />
+                          <h3 className="font-semibold">Text Size</h3>
+                        </div>
+                        
+                        <div className="grid gap-6 max-w-sm">
+                          <div className="space-y-2">
+                            <Label htmlFor="p-size" className="text-xs uppercase tracking-widest font-bold text-muted-foreground">Paragraph Text Size</Label>
+                            <div className="flex items-center gap-4">
+                              <Input 
+                                id="p-size" 
+                                type="number" 
+                                value={fontSizeParagraph} 
+                                onChange={(e) => setFontSizeParagraph(parseInt(e.target.value) || 16)}
+                                className="w-24"
+                                min="12"
+                                max="32"
+                              />
+                              <span className="text-sm text-muted-foreground">pixels</span>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor="c-size" className="text-xs uppercase tracking-widest font-bold text-muted-foreground">Comment Text Size</Label>
+                            <div className="flex items-center gap-4">
+                              <Input 
+                                id="c-size" 
+                                type="number" 
+                                value={fontSizeComment} 
+                                onChange={(e) => setFontSizeComment(parseInt(e.target.value) || 16)}
+                                className="w-24"
+                                min="12"
+                                max="32"
+                              />
+                              <span className="text-sm text-muted-foreground">pixels</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="p-4 rounded-xl bg-muted/30 border border-border space-y-3">
+                        <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Live Preview</h4>
+                        <div className="space-y-2">
+                          <div className="p-3 rounded-lg bg-card border border-border" style={{ fontSize: `${fontSizeParagraph}px` }}>
+                            This is a sample paragraph text.
+                          </div>
+                          <div className="p-3 rounded-lg bg-primary/10 border border-primary/20 text-primary" style={{ fontSize: `${fontSizeComment}px`, fontStyle: 'italic' }}>
+                            This is a sample AI suggestion or user comment text.
+                          </div>
+                        </div>
+                      </div>
                     </CardContent>
                   </Card>
                 </TabsContent>
