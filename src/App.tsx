@@ -109,7 +109,11 @@ export default function App() {
     try {
       const result = await processArticle(inputText);
       setArticle(result);
-      setCollapsedSuggestions(new Set(result.items.map(item => item.id)));
+      const allIds = [
+        ...result.items.map(item => item.id),
+        ...result.reviewQuestions.map(q => q.id)
+      ];
+      setCollapsedSuggestions(new Set(allIds));
       setCollapsedNotes(new Set()); // New articles have no notes yet
       setInputText("");
     } catch (err) {
@@ -933,10 +937,18 @@ export default function App() {
                               
                               <div className="space-y-2">
                                 <div className="flex items-center justify-between">
-                                  <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-                                    <Sparkles size={10} className="text-amber-500" />
-                                    AI Suggested Summary
-                                  </label>
+                                  <div className="flex items-center gap-2">
+                                    <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+                                      <Sparkles size={10} className="text-amber-500" />
+                                      AI Suggested Summary
+                                    </label>
+                                    <button
+                                      onClick={() => toggleSuggestion(q.id)}
+                                      className="p-1 text-muted-foreground hover:text-foreground"
+                                    >
+                                      {collapsedSuggestions.has(q.id) ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                                    </button>
+                                  </div>
                                   <Button 
                                     variant="ghost" 
                                     size="sm" 
@@ -946,9 +958,20 @@ export default function App() {
                                     <Copy size={8} /> Use Suggestion
                                   </Button>
                                 </div>
-                                <div className="p-4 rounded-xl bg-background border border-border/50 italic text-foreground/70 leading-relaxed shadow-inner" style={{ fontSize: `${fontSizeComment}px` }}>
-                                  {q.suggestedComment}
-                                </div>
+                                <AnimatePresence>
+                                  {!collapsedSuggestions.has(q.id) && (
+                                    <motion.div
+                                      initial={{ height: 0, opacity: 0 }}
+                                      animate={{ height: "auto", opacity: 1 }}
+                                      exit={{ height: 0, opacity: 0 }}
+                                      className="overflow-hidden"
+                                    >
+                                      <div className="p-4 rounded-xl bg-background border border-border/50 italic text-foreground/70 leading-relaxed shadow-inner mt-2" style={{ fontSize: `${fontSizeComment}px` }}>
+                                        {q.suggestedComment}
+                                      </div>
+                                    </motion.div>
+                                  )}
+                                </AnimatePresence>
                               </div>
                             </CardContent>
                           </Card>
