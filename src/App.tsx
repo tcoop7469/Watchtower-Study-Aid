@@ -32,7 +32,9 @@ import {
   Pin,
   PinOff,
   Settings,
-  Sliders
+  Sliders,
+  History,
+  Clock
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -62,6 +64,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("study");
   const [fontSizeParagraph, setFontSizeParagraph] = useState(16);
   const [fontSizeComment, setFontSizeComment] = useState(16);
+  const [history, setHistory] = useState<WatchtowerArticle[]>([]);
 
   // Initialize theme and font sizes from system preference or local storage
   useEffect(() => {
@@ -78,7 +81,34 @@ export default function App() {
 
     const savedCSize = localStorage.getItem("fontSizeComment");
     if (savedCSize) setFontSizeComment(parseInt(savedCSize));
+
+    const savedHistory = localStorage.getItem("articleHistory");
+    if (savedHistory) {
+      try {
+        setHistory(JSON.parse(savedHistory));
+      } catch (e) {
+        console.error("Failed to parse history", e);
+      }
+    }
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem("articleHistory", JSON.stringify(history));
+  }, [history]);
+
+  useEffect(() => {
+    if (article && article.id) {
+      setHistory(prev => {
+        const existing = prev.findIndex(item => item.id === article?.id);
+        if (existing !== -1) {
+          const newHistory = [...prev];
+          newHistory[existing] = article;
+          return newHistory;
+        }
+        return [article, ...prev];
+      });
+    }
+  }, [article]);
 
   useEffect(() => {
     localStorage.setItem("fontSizeParagraph", fontSizeParagraph.toString());
@@ -108,6 +138,8 @@ export default function App() {
     setError(null);
     try {
       const result = await processArticle(inputText);
+      result.id = Date.now().toString();
+      result.timestamp = Date.now();
       setArticle(result);
       const allIds = [
         ...result.items.map(item => item.id),
@@ -434,14 +466,15 @@ export default function App() {
           <BookOpen size={22} />
         </div>
         
-        {article && (
           <nav className="flex flex-col gap-4">
-            {[
+            {(article ? [
               { id: "study", icon: Layout, label: "Study" },
               { id: "article", icon: FileText, label: "Article" },
-              { id: "scriptures", icon: BookOpen, label: "Scriptures" },
+              { id: "scriptures", icon: BookOpen, label: "Scriptures" }
+            ] : []).concat([
+              { id: "history", icon: History, label: "History" },
               { id: "settings", icon: Settings, label: "Settings" }
-            ].map((nav) => (
+            ]).map((nav) => (
               <button
                 key={nav.id}
                 onClick={() => setActiveTab(nav.id)}
@@ -466,7 +499,6 @@ export default function App() {
               </button>
             ))}
           </nav>
-        )}
 
         <div className="mt-auto flex flex-col gap-4">
           <Button 
@@ -536,7 +568,148 @@ export default function App() {
 
         <main className="max-w-4xl mx-auto w-full p-6 pb-24">
         <AnimatePresence mode="wait">
-          {!article && !isLoading ? (
+          {activeTab === "history" ? (
+            <motion.div
+              key="history-view"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="space-y-6"
+            >
+              <Card className="border-border shadow-xl shadow-primary/5 bg-card overflow-hidden">
+                <CardHeader className="bg-muted/50 border-b border-border">
+                  <div className="flex items-center gap-3">
+                    <History className="text-primary" size={24} />
+                    <div>
+                      <CardTitle className="text-2xl font-serif italic text-primary">Study History</CardTitle>
+                      <CardDescription>
+                        Review your previously imported articles and study notes.
+                      </CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                  {history.length === 0 ? (
+                    <div className="p-12 text-center text-muted-foreground flex flex-col items-center gap-4">
+                      <History size={48} className="opacity-20" />
+                      <p>No study history available.</p>
+                      <Button variant="outline" onClick={() => setActiveTab("study")}>Import an Article</Button>
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-border">
+                      {history.map(item => (
+                        <div key={item.id} className="p-6 flex items-start sm:items-center flex-col sm:flex-row justify-between gap-4 hover:bg-muted/30 transition-colors">
+                          <div className="space-y-2">
+                            <h3 className="font-medium text-lg leading-tight">
+                              {item.title}
+                            </h3>
+                            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                              <span className="flex items-center gap-1">
+                                <Clock size={12} />
+                                {item.timestamp ? new Date(item.timestamp).toLocaleString() : 'Unknown Date'}
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <Layout size={12} />
+                                {item.items?.length || 0} Paragraphs
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+                            <Button 
+                              variant="secondary" 
+                              className="font-medium"
+                              onClick={() => {
+                                setArticle(item);
+                                setActiveTab("study");
+                              }}
+                            >
+                              Review Study
+                            </Button>
+                            <Button
+                              variant="ghost" 
+                              className="text-destructive hover:bg-destructive/10"
+                              onClick={() => setHistory(prev => prev.filter(h => h.id !== item.id))}
+                            >
+                              <Trash2 size={16} />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </motion.div>
+          ) : activeTab === "settings" ? (
+             <motion.div
+               key="settings-view"
+               initial={{ opacity: 0, y: 20 }}
+               animate={{ opacity: 1, y: 0 }}
+               exit={{ opacity: 0, scale: 0.95 }}
+               className="space-y-6"
+             >
+                  <Card className="border-border bg-card shadow-xl shadow-primary/5">
+                    <CardHeader className="border-b border-border bg-muted/30">
+                      <CardTitle className="text-xl font-serif italic text-primary">Display Settings</CardTitle>
+                      <CardDescription>Customize the appearance of your study assistant.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-6 space-y-8">
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Sliders className="text-primary" size={18} />
+                          <h3 className="font-semibold">Text Size</h3>
+                        </div>
+                        
+                        <div className="grid gap-6 max-w-sm">
+                          <div className="space-y-2">
+                            <Label htmlFor="p-size" className="text-xs uppercase tracking-widest font-bold text-muted-foreground">Paragraph Text Size</Label>
+                            <div className="flex items-center gap-4">
+                              <Input 
+                                id="p-size" 
+                                type="number" 
+                                value={fontSizeParagraph} 
+                                onChange={(e) => setFontSizeParagraph(parseInt(e.target.value) || 16)}
+                                className="w-24"
+                                min="12"
+                                max="32"
+                              />
+                              <span className="text-sm text-muted-foreground">pixels</span>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor="c-size" className="text-xs uppercase tracking-widest font-bold text-muted-foreground">Comment Text Size</Label>
+                            <div className="flex items-center gap-4">
+                              <Input 
+                                id="c-size" 
+                                type="number" 
+                                value={fontSizeComment} 
+                                onChange={(e) => setFontSizeComment(parseInt(e.target.value) || 16)}
+                                className="w-24"
+                                min="12"
+                                max="32"
+                              />
+                              <span className="text-sm text-muted-foreground">pixels</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="p-4 rounded-xl bg-muted/30 border border-border space-y-3">
+                        <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Live Preview</h4>
+                        <div className="space-y-2">
+                          <div className="p-3 rounded-lg bg-card border border-border" style={{ fontSize: `${fontSizeParagraph}px` }}>
+                            This is a sample paragraph text.
+                          </div>
+                          <div className="p-3 rounded-lg bg-primary/10 border border-primary/20 text-primary" style={{ fontSize: `${fontSizeComment}px`, fontStyle: 'italic' }}>
+                            This is a sample AI suggestion or user comment text.
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+             </motion.div>
+          ) : !article && !isLoading ? (
             <motion.div
               key="import-view"
               initial={{ opacity: 0, y: 20 }}
@@ -1055,69 +1228,6 @@ export default function App() {
                           ))}
                         </div>
                       </ScrollArea>
-                    </CardContent>
-                  </Card>
-                </TabsContent>
-
-                <TabsContent value="settings" className="outline-none">
-                  <Card className="border-border bg-card shadow-xl shadow-primary/5">
-                    <CardHeader className="border-b border-border bg-muted/30">
-                      <CardTitle className="text-xl font-serif italic text-primary">Display Settings</CardTitle>
-                      <CardDescription>Customize the appearance of your study assistant.</CardDescription>
-                    </CardHeader>
-                    <CardContent className="p-6 space-y-8">
-                      <div className="space-y-4">
-                        <div className="flex items-center gap-2 mb-4">
-                          <Sliders className="text-primary" size={18} />
-                          <h3 className="font-semibold">Text Size</h3>
-                        </div>
-                        
-                        <div className="grid gap-6 max-w-sm">
-                          <div className="space-y-2">
-                            <Label htmlFor="p-size" className="text-xs uppercase tracking-widest font-bold text-muted-foreground">Paragraph Text Size</Label>
-                            <div className="flex items-center gap-4">
-                              <Input 
-                                id="p-size" 
-                                type="number" 
-                                value={fontSizeParagraph} 
-                                onChange={(e) => setFontSizeParagraph(parseInt(e.target.value) || 16)}
-                                className="w-24"
-                                min="12"
-                                max="32"
-                              />
-                              <span className="text-sm text-muted-foreground">pixels</span>
-                            </div>
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label htmlFor="c-size" className="text-xs uppercase tracking-widest font-bold text-muted-foreground">Comment Text Size</Label>
-                            <div className="flex items-center gap-4">
-                              <Input 
-                                id="c-size" 
-                                type="number" 
-                                value={fontSizeComment} 
-                                onChange={(e) => setFontSizeComment(parseInt(e.target.value) || 16)}
-                                className="w-24"
-                                min="12"
-                                max="32"
-                              />
-                              <span className="text-sm text-muted-foreground">pixels</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="p-4 rounded-xl bg-muted/30 border border-border space-y-3">
-                        <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Live Preview</h4>
-                        <div className="space-y-2">
-                          <div className="p-3 rounded-lg bg-card border border-border" style={{ fontSize: `${fontSizeParagraph}px` }}>
-                            This is a sample paragraph text.
-                          </div>
-                          <div className="p-3 rounded-lg bg-primary/10 border border-primary/20 text-primary" style={{ fontSize: `${fontSizeComment}px`, fontStyle: 'italic' }}>
-                            This is a sample AI suggestion or user comment text.
-                          </div>
-                        </div>
-                      </div>
                     </CardContent>
                   </Card>
                 </TabsContent>
