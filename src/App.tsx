@@ -32,9 +32,7 @@ import {
   Pin,
   PinOff,
   Settings,
-  Sliders,
-  History,
-  Clock
+  Sliders
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -57,14 +55,15 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [collapsedUserComments, setCollapsedUserComments] = useState<Set<string>>(new Set());
   const [collapsedSuggestions, setCollapsedSuggestions] = useState<Set<string>>(new Set());
   const [collapsedNotes, setCollapsedNotes] = useState<Set<string>>(new Set());
   const [pinnedSuggestions, setPinnedSuggestions] = useState<Set<string>>(new Set());
+  const [pinnedUserComments, setPinnedUserComments] = useState<Set<string>>(new Set());
   const [selectedScripture, setSelectedScripture] = useState<{ reference: string; text: string } | null>(null);
   const [activeTab, setActiveTab] = useState("study");
   const [fontSizeParagraph, setFontSizeParagraph] = useState(16);
   const [fontSizeComment, setFontSizeComment] = useState(16);
-  const [history, setHistory] = useState<WatchtowerArticle[]>([]);
 
   // Initialize theme and font sizes from system preference or local storage
   useEffect(() => {
@@ -81,34 +80,7 @@ export default function App() {
 
     const savedCSize = localStorage.getItem("fontSizeComment");
     if (savedCSize) setFontSizeComment(parseInt(savedCSize));
-
-    const savedHistory = localStorage.getItem("articleHistory");
-    if (savedHistory) {
-      try {
-        setHistory(JSON.parse(savedHistory));
-      } catch (e) {
-        console.error("Failed to parse history", e);
-      }
-    }
   }, []);
-
-  useEffect(() => {
-    localStorage.setItem("articleHistory", JSON.stringify(history));
-  }, [history]);
-
-  useEffect(() => {
-    if (article && article.id) {
-      setHistory(prev => {
-        const existing = prev.findIndex(item => item.id === article?.id);
-        if (existing !== -1) {
-          const newHistory = [...prev];
-          newHistory[existing] = article;
-          return newHistory;
-        }
-        return [article, ...prev];
-      });
-    }
-  }, [article]);
 
   useEffect(() => {
     localStorage.setItem("fontSizeParagraph", fontSizeParagraph.toString());
@@ -138,8 +110,6 @@ export default function App() {
     setError(null);
     try {
       const result = await processArticle(inputText);
-      result.id = Date.now().toString();
-      result.timestamp = Date.now();
       setArticle(result);
       const allIds = [
         ...result.items.map(item => item.id),
@@ -266,6 +236,24 @@ export default function App() {
 
   const togglePin = (id: string) => {
     setPinnedSuggestions(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleUserComment = (id: string) => {
+    setCollapsedUserComments(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleUserPin = (id: string) => {
+    setPinnedUserComments(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -466,15 +454,14 @@ export default function App() {
           <BookOpen size={22} />
         </div>
         
+        {article && (
           <nav className="flex flex-col gap-4">
-            {(article ? [
+            {[
               { id: "study", icon: Layout, label: "Study" },
               { id: "article", icon: FileText, label: "Article" },
-              { id: "scriptures", icon: BookOpen, label: "Scriptures" }
-            ] : []).concat([
-              { id: "history", icon: History, label: "History" },
+              { id: "scriptures", icon: BookOpen, label: "Scriptures" },
               { id: "settings", icon: Settings, label: "Settings" }
-            ]).map((nav) => (
+            ].map((nav) => (
               <button
                 key={nav.id}
                 onClick={() => setActiveTab(nav.id)}
@@ -499,6 +486,7 @@ export default function App() {
               </button>
             ))}
           </nav>
+        )}
 
         <div className="mt-auto flex flex-col gap-4">
           <Button 
@@ -568,148 +556,7 @@ export default function App() {
 
         <main className="max-w-4xl mx-auto w-full p-6 pb-24">
         <AnimatePresence mode="wait">
-          {activeTab === "history" ? (
-            <motion.div
-              key="history-view"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="space-y-6"
-            >
-              <Card className="border-border shadow-xl shadow-primary/5 bg-card overflow-hidden">
-                <CardHeader className="bg-muted/50 border-b border-border">
-                  <div className="flex items-center gap-3">
-                    <History className="text-primary" size={24} />
-                    <div>
-                      <CardTitle className="text-2xl font-serif italic text-primary">Study History</CardTitle>
-                      <CardDescription>
-                        Review your previously imported articles and study notes.
-                      </CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="p-0">
-                  {history.length === 0 ? (
-                    <div className="p-12 text-center text-muted-foreground flex flex-col items-center gap-4">
-                      <History size={48} className="opacity-20" />
-                      <p>No study history available.</p>
-                      <Button variant="outline" onClick={() => setActiveTab("study")}>Import an Article</Button>
-                    </div>
-                  ) : (
-                    <div className="divide-y divide-border">
-                      {history.map(item => (
-                        <div key={item.id} className="p-6 flex items-start sm:items-center flex-col sm:flex-row justify-between gap-4 hover:bg-muted/30 transition-colors">
-                          <div className="space-y-2">
-                            <h3 className="font-medium text-lg leading-tight">
-                              {item.title}
-                            </h3>
-                            <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                              <span className="flex items-center gap-1">
-                                <Clock size={12} />
-                                {item.timestamp ? new Date(item.timestamp).toLocaleString() : 'Unknown Date'}
-                              </span>
-                              <span className="flex items-center gap-1">
-                                <Layout size={12} />
-                                {item.items?.length || 0} Paragraphs
-                              </span>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
-                            <Button 
-                              variant="secondary" 
-                              className="font-medium"
-                              onClick={() => {
-                                setArticle(item);
-                                setActiveTab("study");
-                              }}
-                            >
-                              Review Study
-                            </Button>
-                            <Button
-                              variant="ghost" 
-                              className="text-destructive hover:bg-destructive/10"
-                              onClick={() => setHistory(prev => prev.filter(h => h.id !== item.id))}
-                            >
-                              <Trash2 size={16} />
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </motion.div>
-          ) : activeTab === "settings" ? (
-             <motion.div
-               key="settings-view"
-               initial={{ opacity: 0, y: 20 }}
-               animate={{ opacity: 1, y: 0 }}
-               exit={{ opacity: 0, scale: 0.95 }}
-               className="space-y-6"
-             >
-                  <Card className="border-border bg-card shadow-xl shadow-primary/5">
-                    <CardHeader className="border-b border-border bg-muted/30">
-                      <CardTitle className="text-xl font-serif italic text-primary">Display Settings</CardTitle>
-                      <CardDescription>Customize the appearance of your study assistant.</CardDescription>
-                    </CardHeader>
-                    <CardContent className="p-6 space-y-8">
-                      <div className="space-y-4">
-                        <div className="flex items-center gap-2 mb-4">
-                          <Sliders className="text-primary" size={18} />
-                          <h3 className="font-semibold">Text Size</h3>
-                        </div>
-                        
-                        <div className="grid gap-6 max-w-sm">
-                          <div className="space-y-2">
-                            <Label htmlFor="p-size" className="text-xs uppercase tracking-widest font-bold text-muted-foreground">Paragraph Text Size</Label>
-                            <div className="flex items-center gap-4">
-                              <Input 
-                                id="p-size" 
-                                type="number" 
-                                value={fontSizeParagraph} 
-                                onChange={(e) => setFontSizeParagraph(parseInt(e.target.value) || 16)}
-                                className="w-24"
-                                min="12"
-                                max="32"
-                              />
-                              <span className="text-sm text-muted-foreground">pixels</span>
-                            </div>
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label htmlFor="c-size" className="text-xs uppercase tracking-widest font-bold text-muted-foreground">Comment Text Size</Label>
-                            <div className="flex items-center gap-4">
-                              <Input 
-                                id="c-size" 
-                                type="number" 
-                                value={fontSizeComment} 
-                                onChange={(e) => setFontSizeComment(parseInt(e.target.value) || 16)}
-                                className="w-24"
-                                min="12"
-                                max="32"
-                              />
-                              <span className="text-sm text-muted-foreground">pixels</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="p-4 rounded-xl bg-muted/30 border border-border space-y-3">
-                        <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Live Preview</h4>
-                        <div className="space-y-2">
-                          <div className="p-3 rounded-lg bg-card border border-border" style={{ fontSize: `${fontSizeParagraph}px` }}>
-                            This is a sample paragraph text.
-                          </div>
-                          <div className="p-3 rounded-lg bg-primary/10 border border-primary/20 text-primary" style={{ fontSize: `${fontSizeComment}px`, fontStyle: 'italic' }}>
-                            This is a sample AI suggestion or user comment text.
-                          </div>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-             </motion.div>
-          ) : !article && !isLoading ? (
+          {!article && !isLoading ? (
             <motion.div
               key="import-view"
               initial={{ opacity: 0, y: 20 }}
@@ -851,31 +698,93 @@ export default function App() {
                             {renderParagraph(item)}
                           </div>
                           <div className="space-y-4">
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-                                  <User size={12} className="text-primary" />
+                            <div className={cn(
+                              "border rounded-xl overflow-hidden transition-all duration-300",
+                              pinnedUserComments.has(item.id) 
+                                ? "border-primary/30 bg-primary/5 shadow-md shadow-primary/5" 
+                                : "border-border bg-muted/20"
+                            )}>
+                              <div className="flex items-center justify-between px-4 py-1.5 bg-background/50 border-b border-border/10">
+                                <button 
+                                  onClick={() => toggleUserComment(item.id)}
+                                  className="flex-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground hover:text-foreground transition-colors text-left"
+                                >
+                                  <User size={12} className={cn(
+                                    pinnedUserComments.has(item.id) ? "text-primary" : "text-primary/60"
+                                  )} />
                                   My Comment
-                                </label>
-                                {!pinnedSuggestions.has(item.id) && (
+                                  {pinnedUserComments.has(item.id) && (
+                                    <span className="bg-primary/20 text-primary px-1.5 py-0.5 rounded text-[8px] tracking-tighter ml-1">PINNED</span>
+                                  )}
+                                </button>
+                                <div className="flex items-center gap-1">
+                                  {!pinnedSuggestions.has(item.id) && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-6 px-2 text-[9px] font-bold uppercase tracking-widest gap-1.5 hover:bg-amber-500/10 hover:text-amber-600 transition-colors"
+                                      onClick={() => toggleSuggestion(item.id)}
+                                    >
+                                      <Sparkles size={10} className="text-amber-500" />
+                                      {collapsedSuggestions.has(item.id) ? "Show Suggestion" : "Hide Suggestion"}
+                                    </Button>
+                                  )}
                                   <Button
                                     variant="ghost"
-                                    size="sm"
-                                    className="h-6 px-2 text-[10px] font-bold uppercase tracking-widest gap-1.5 hover:bg-amber-500/10 hover:text-amber-600 transition-colors"
-                                    onClick={() => toggleSuggestion(item.id)}
+                                    size="icon"
+                                    className={cn(
+                                      "h-6 w-6 rounded-full transition-colors",
+                                      pinnedUserComments.has(item.id) ? "text-primary bg-primary/20" : "text-muted-foreground hover:bg-muted"
+                                    )}
+                                    onClick={() => toggleUserPin(item.id)}
+                                    title={pinnedUserComments.has(item.id) ? "Unpin Comment" : "Pin Comment"}
                                   >
-                                    <Sparkles size={10} className="text-amber-500" />
-                                    {collapsedSuggestions.has(item.id) ? "Show AI Suggestion" : "Hide AI Suggestion"}
+                                    {pinnedUserComments.has(item.id) ? <PinOff size={10} /> : <Pin size={10} />}
                                   </Button>
-                                )}
+                                  <button
+                                    onClick={() => toggleUserComment(item.id)}
+                                    className="p-1 text-muted-foreground hover:text-foreground"
+                                  >
+                                    {collapsedUserComments.has(item.id) ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                                  </button>
+                                </div>
                               </div>
-                              <Textarea
-                                value={item.userComment}
-                                onChange={(e) => handleUpdateComment(item.id, e.target.value)}
-                                className="min-h-[100px] border-border focus-visible:ring-primary bg-background shadow-inner"
-                                style={{ fontSize: `${fontSizeComment}px` }}
-                                placeholder="Type your personal comment here..."
-                              />
+                              <AnimatePresence mode="wait">
+                                {(pinnedUserComments.has(item.id) || !collapsedUserComments.has(item.id)) ? (
+                                  <motion.div
+                                    key="expanded"
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: "auto", opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
+                                    className="overflow-hidden"
+                                  >
+                                    <div className="p-4">
+                                      <Textarea
+                                        value={item.userComment}
+                                        onChange={(e) => handleUpdateComment(item.id, e.target.value)}
+                                        className="min-h-[100px] border-border focus-visible:ring-primary bg-background shadow-inner"
+                                        style={{ fontSize: `${fontSizeComment}px` }}
+                                        placeholder="Type your personal comment here..."
+                                      />
+                                    </div>
+                                  </motion.div>
+                                ) : (
+                                  item.userComment && (
+                                    <motion.div
+                                      key="collapsed-preview"
+                                      initial={{ opacity: 0 }}
+                                      animate={{ opacity: 1 }}
+                                      exit={{ opacity: 0 }}
+                                      className="p-4 pt-2"
+                                      onClick={() => toggleUserComment(item.id)}
+                                    >
+                                      <div className="p-3 rounded-lg bg-background/80 border border-border/50 italic text-foreground/60 text-xs line-clamp-2 cursor-pointer hover:bg-background/90 transition-colors shadow-sm">
+                                        {item.userComment}
+                                      </div>
+                                    </motion.div>
+                                  )
+                                )}
+                              </AnimatePresence>
                             </div>
 
                               <div className={cn(
@@ -1094,18 +1003,82 @@ export default function App() {
                               </div>
                             </CardHeader>
                             <CardContent className="p-6 space-y-6">
-                              <div className="space-y-3">
-                                <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-                                  <User size={10} className="text-primary" />
-                                  My Summary Comment
-                                </label>
-                                <Textarea
-                                  value={q.userComment}
-                                  onChange={(e) => handleUpdateComment(q.id, e.target.value)}
-                                  className="min-h-[80px] bg-background border-border"
-                                  style={{ fontSize: `${fontSizeComment}px` }}
-                                  placeholder="Type your summary response here..."
-                                />
+                              <div className={cn(
+                                "border rounded-xl overflow-hidden transition-all duration-300",
+                                pinnedUserComments.has(q.id) 
+                                  ? "border-primary/30 bg-primary/5 shadow-md shadow-primary/5" 
+                                  : "border-border bg-muted/20"
+                              )}>
+                                <div className="flex items-center justify-between px-4 py-1.5 bg-background/50 border-b border-border/10">
+                                  <button 
+                                    onClick={() => toggleUserComment(q.id)}
+                                    className="flex-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground hover:text-foreground transition-colors text-left"
+                                  >
+                                    <User size={10} className={cn(
+                                      pinnedUserComments.has(q.id) ? "text-primary" : "text-primary/60"
+                                    )} />
+                                    My Summary Comment
+                                    {pinnedUserComments.has(q.id) && (
+                                      <span className="bg-primary/20 text-primary px-1.5 py-0.5 rounded text-[8px] tracking-tighter ml-1">PINNED</span>
+                                    )}
+                                  </button>
+                                  <div className="flex items-center gap-1">
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className={cn(
+                                        "h-6 w-6 rounded-full transition-colors",
+                                        pinnedUserComments.has(q.id) ? "text-primary bg-primary/20" : "text-muted-foreground hover:bg-muted"
+                                      )}
+                                      onClick={() => toggleUserPin(q.id)}
+                                      title={pinnedUserComments.has(q.id) ? "Unpin Comment" : "Pin Comment"}
+                                    >
+                                      {pinnedUserComments.has(q.id) ? <PinOff size={10} /> : <Pin size={10} />}
+                                    </Button>
+                                    <button
+                                      onClick={() => toggleUserComment(q.id)}
+                                      className="p-1 text-muted-foreground hover:text-foreground"
+                                    >
+                                      {collapsedUserComments.has(q.id) ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                                    </button>
+                                  </div>
+                                </div>
+                                <AnimatePresence mode="wait">
+                                  {(pinnedUserComments.has(q.id) || !collapsedUserComments.has(q.id)) ? (
+                                    <motion.div
+                                      key="expanded-summary"
+                                      initial={{ height: 0, opacity: 0 }}
+                                      animate={{ height: "auto", opacity: 1 }}
+                                      exit={{ height: 0, opacity: 0 }}
+                                      className="overflow-hidden"
+                                    >
+                                      <div className="p-4">
+                                        <Textarea
+                                          value={q.userComment}
+                                          onChange={(e) => handleUpdateComment(q.id, e.target.value)}
+                                          className="min-h-[80px] bg-background border-border"
+                                          style={{ fontSize: `${fontSizeComment}px` }}
+                                          placeholder="Type your summary response here..."
+                                        />
+                                      </div>
+                                    </motion.div>
+                                  ) : (
+                                    q.userComment && (
+                                      <motion.div
+                                        key="collapsed-summary-preview"
+                                        initial={{ opacity: 0 }}
+                                        animate={{ opacity: 1 }}
+                                        exit={{ opacity: 0 }}
+                                        className="p-4 pt-2"
+                                        onClick={() => toggleUserComment(q.id)}
+                                      >
+                                        <div className="p-3 rounded-lg bg-background/80 border border-border/50 italic text-foreground/60 text-xs line-clamp-2 cursor-pointer hover:bg-background/90 transition-colors shadow-sm">
+                                          {q.userComment}
+                                        </div>
+                                      </motion.div>
+                                    )
+                                  )}
+                                </AnimatePresence>
                               </div>
                               
                               <div className="space-y-2">
@@ -1228,6 +1201,69 @@ export default function App() {
                           ))}
                         </div>
                       </ScrollArea>
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+
+                <TabsContent value="settings" className="outline-none">
+                  <Card className="border-border bg-card shadow-xl shadow-primary/5">
+                    <CardHeader className="border-b border-border bg-muted/30">
+                      <CardTitle className="text-xl font-serif italic text-primary">Display Settings</CardTitle>
+                      <CardDescription>Customize the appearance of your study assistant.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-6 space-y-8">
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Sliders className="text-primary" size={18} />
+                          <h3 className="font-semibold">Text Size</h3>
+                        </div>
+                        
+                        <div className="grid gap-6 max-w-sm">
+                          <div className="space-y-2">
+                            <Label htmlFor="p-size" className="text-xs uppercase tracking-widest font-bold text-muted-foreground">Paragraph Text Size</Label>
+                            <div className="flex items-center gap-4">
+                              <Input 
+                                id="p-size" 
+                                type="number" 
+                                value={fontSizeParagraph} 
+                                onChange={(e) => setFontSizeParagraph(parseInt(e.target.value) || 16)}
+                                className="w-24"
+                                min="12"
+                                max="32"
+                              />
+                              <span className="text-sm text-muted-foreground">pixels</span>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor="c-size" className="text-xs uppercase tracking-widest font-bold text-muted-foreground">Comment Text Size</Label>
+                            <div className="flex items-center gap-4">
+                              <Input 
+                                id="c-size" 
+                                type="number" 
+                                value={fontSizeComment} 
+                                onChange={(e) => setFontSizeComment(parseInt(e.target.value) || 16)}
+                                className="w-24"
+                                min="12"
+                                max="32"
+                              />
+                              <span className="text-sm text-muted-foreground">pixels</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="p-4 rounded-xl bg-muted/30 border border-border space-y-3">
+                        <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Live Preview</h4>
+                        <div className="space-y-2">
+                          <div className="p-3 rounded-lg bg-card border border-border" style={{ fontSize: `${fontSizeParagraph}px` }}>
+                            This is a sample paragraph text.
+                          </div>
+                          <div className="p-3 rounded-lg bg-primary/10 border border-primary/20 text-primary" style={{ fontSize: `${fontSizeComment}px`, fontStyle: 'italic' }}>
+                            This is a sample AI suggestion or user comment text.
+                          </div>
+                        </div>
+                      </div>
                     </CardContent>
                   </Card>
                 </TabsContent>

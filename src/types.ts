@@ -30,8 +30,6 @@ export interface ReviewQuestion {
 }
 
 export interface WatchtowerArticle {
-  id?: string;
-  timestamp?: number;
   title: string;
   items: StudyItem[];
   reviewQuestions: ReviewQuestion[];
