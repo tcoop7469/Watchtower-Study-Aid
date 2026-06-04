@@ -58,6 +58,25 @@ import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 export default function App() {
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  const handleSignIn = async () => {
+    try {
+      setAuthError(null);
+      await signInWithPopup(auth, new GoogleAuthProvider());
+    } catch (err: any) {
+      console.error(err);
+      if (err.code === 'auth/popup-blocked') {
+        setAuthError("Sign-in popup was blocked. Please try opening the app in a new tab or allow popups for this site.");
+      } else if (err.code === 'auth/popup-closed-by-user') {
+        setAuthError("Sign-in popup was closed before completing.");
+      } else if (err.code === 'auth/unauthorized-domain') {
+        setAuthError("This domain is not authorized for Google Sign-In. You may need to add it to your Firebase Console.");
+      } else {
+        setAuthError(err.message || "Failed to sign in. Please try again.");
+      }
+    }
+  };
 
   const [inputText, setInputText] = useState("");
   const [article, setArticle] = useState<WatchtowerArticle | null>(null);
@@ -441,9 +460,15 @@ export default function App() {
             <CardDescription className="text-md">Sign in to save and sync your study articles</CardDescription>
           </CardHeader>
           <CardContent className="p-8 pb-10 flex flex-col items-center">
-            <Button size="lg" className="w-full text-md h-12 gap-3" onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}>
+            <Button size="lg" className="w-full text-md h-12 gap-3" onClick={handleSignIn}>
               Continue with Google
             </Button>
+            {authError && <p className="text-destructive mt-4 text-sm text-center">{authError}</p>}
+            {authError && authError.includes("popup") && (
+              <p className="text-muted-foreground mt-2 text-xs text-center">
+                Try opening the app in a new tab, as some devices block popups in the preview window.
+              </p>
+            )}
           </CardContent>
         </Card>
       </div>
