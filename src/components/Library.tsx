@@ -1,13 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { collection, query, where, onSnapshot, deleteDoc, doc, setDoc } from 'firebase/firestore';
-import { db, auth, handleFirestoreError } from '../services/firebase';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Trash2, Image as ImageIcon, Calendar, Edit2, X, Check } from 'lucide-react';
 import { WatchtowerArticle } from '../types';
 
-interface ArticleRecord {
+export interface ArticleRecord {
   id: string;
   userId: string;
   title: string;
@@ -25,41 +23,55 @@ export function Library({ onSelectArticle }: { onSelectArticle: (article: Watcht
   const [editTitle, setEditTitle] = useState("");
   const [editDate, setEditDate] = useState("");
 
+  const loadArticles = () => {
+    try {
+      const stored = localStorage.getItem('watchtower-articles');
+      if (stored) {
+        const parsed = JSON.parse(stored) as ArticleRecord[];
+        parsed.sort((a, b) => {
+          const dateA = a.date ? new Date(a.date).getTime() : 0;
+          const dateB = b.date ? new Date(b.date).getTime() : 0;
+          return dateB - dateA;
+        });
+        setArticles(parsed);
+      }
+    } catch (error) {
+      console.error("Failed to load articles from local storage", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (!auth.currentUser) return;
-    const q = query(
-      collection(db, 'articles'),
-      where('userId', '==', auth.currentUser.uid)
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const records: ArticleRecord[] = [];
-      snapshot.forEach((doc) => {
-        records.push({ id: doc.id, ...doc.data() } as ArticleRecord);
-      });
-      // Sort client-side to avoid composite index requirements
-      records.sort((a, b) => {
-        const dateA = a.date ? new Date(a.date).getTime() : 0;
-        const dateB = b.date ? new Date(b.date).getTime() : 0;
-        return dateB - dateA;
-      });
-      setArticles(records);
-      setLoading(false);
-    }, (error) => {
-      handleFirestoreError(error, 'list' as any, 'articles');
-      setLoading(false);
+    loadArticles();
+    
+    // Listen for storage events to sync across tabs, or custom events from the same tab
+    const handleStorageChange = () => {
+      loadArticles();
+    };
+    
+    window.addEventListener('articlesUpdated', handleStorageChange);
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'watchtower-articles') loadArticles();
     });
-
-    return () => unsubscribe();
+    
+    return () => {
+      window.removeEventListener('articlesUpdated', handleStorageChange);
+      window.removeEventListener('storage', handleStorageChange);
+    };
   }, []);
 
-  const handleDelete = async (id: string) => {
+  const saveToStorage = (updatedArticles: ArticleRecord[]) => {
+    localStorage.setItem('watchtower-articles', JSON.stringify(updatedArticles));
+    setArticles(updatedArticles);
+    // Dispatch custom event to notify App.tsx if it's listening
+    window.dispatchEvent(new Event('articlesUpdated'));
+  };
+
+  const handleDelete = (id: string) => {
     if (!confirm('Are you sure you want to delete this article?')) return;
-    try {
-      await deleteDoc(doc(db, 'articles', id));
-    } catch (error) {
-      handleFirestoreError(error, 'delete' as any, 'articles');
-    }
+    const updated = articles.filter(a => a.id !== id);
+    saveToStorage(updated);
   };
 
   const startEditing = (e: React.MouseEvent, record: ArticleRecord) => {
@@ -74,24 +86,34 @@ export function Library({ onSelectArticle }: { onSelectArticle: (article: Watcht
     setEditingId(null);
   };
 
-  const handleEditSave = async (e: React.MouseEvent, id: string) => {
+  const handleEditSave = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if (!editTitle.trim()) return; // Title is required
-    try {
-      const articleRef = doc(db, 'articles', id);
-      // Make sure we also update the title in articleData if it exists
-      const articleToUpdate = articles.find(a => a.id === id);
-      if (articleToUpdate) {
-        const parsed = JSON.parse(articleToUpdate.articleData);
-        parsed.title = editTitle;
-        await setDoc(articleRef, { title: editTitle, date: editDate, articleData: JSON.stringify(parsed) }, { merge: true });
-      } else {
-        await setDoc(articleRef, { title: editTitle, date: editDate }, { merge: true });
+    if (!editTitle.trim()) return;
+    
+    const updated = articles.map(record => {
+      if (record.id === id) {
+        try {
+          const parsed = JSON.parse(record.articleData);
+          parsed.title = editTitle;
+          return {
+            ...record,
+            title: editTitle,
+            date: editDate,
+            articleData: JSON.stringify(parsed)
+          };
+        } catch (e) {
+          return {
+            ...record,
+            title: editTitle,
+            date: editDate
+          };
+        }
       }
-      setEditingId(null);
-    } catch (error) {
-      handleFirestoreError(error, 'update' as any, 'articles');
-    }
+      return record;
+    });
+    
+    saveToStorage(updated);
+    setEditingId(null);
   };
 
   const upcomingArticles = articles.filter(a => !a.date || new Date(a.date) >= new Date(new Date().setHours(0,0,0,0)));

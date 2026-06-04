@@ -51,33 +51,9 @@ import { processArticle, regenerateComment } from "./services/geminiService";
 import { WatchtowerArticle, StudyItem } from "./types";
 import { cn } from "@/lib/utils";
 import { Library } from "./components/Library";
-import { auth, db } from "./services/firebase";
-import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, User as FirebaseUser } from "firebase/auth";
-import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { ArticleRecord } from "./components/Library"; // We'll need to reuse this interface
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
-  const [isAuthReady, setIsAuthReady] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
-
-  const handleSignIn = async () => {
-    try {
-      setAuthError(null);
-      await signInWithPopup(auth, new GoogleAuthProvider());
-    } catch (err: any) {
-      console.error(err);
-      if (err.code === 'auth/popup-blocked') {
-        setAuthError("Sign-in popup was blocked. Please try opening the app in a new tab or allow popups for this site.");
-      } else if (err.code === 'auth/popup-closed-by-user') {
-        setAuthError("Sign-in popup was closed before completing.");
-      } else if (err.code === 'auth/unauthorized-domain') {
-        setAuthError("This domain is not authorized for Google Sign-In. You may need to add it to your Firebase Console.");
-      } else {
-        setAuthError(err.message || "Failed to sign in. Please try again.");
-      }
-    }
-  };
-
   const [inputText, setInputText] = useState("");
   const [article, setArticle] = useState<WatchtowerArticle | null>(null);
   const [activeArticleId, setActiveArticleId] = useState<string | null>(null);
@@ -99,14 +75,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("import"); // 'import' is the default dashboard
   const [fontSizeParagraph, setFontSizeParagraph] = useState(16);
   const [fontSizeComment, setFontSizeComment] = useState(16);
-
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
-      setIsAuthReady(true);
-    });
-    return () => unsub();
-  }, []);
 
   // Initialize theme and font sizes from system preference or local storage
   useEffect(() => {
@@ -148,21 +116,33 @@ export default function App() {
   };
 
   const saveArticleToDB = async (parsedArticle: WatchtowerArticle) => {
-    if (!currentUser) return null;
     const newId = Math.random().toString(36).substring(2, 10);
     try {
-      const record = {
-        userId: currentUser.uid,
+      const record: ArticleRecord = {
+        id: newId,
+        userId: "local-user",
         title: parsedArticle.title || "Untitled Article",
         date: articleDate,
         createdAt: Date.now(),
-        articleData: JSON.stringify(parsedArticle)
+        articleData: JSON.stringify(parsedArticle),
+        coverUrl: ""
       };
-      await setDoc(doc(db, "articles", newId), record);
+      
+      const stored = localStorage.getItem('watchtower-articles');
+      let articles: ArticleRecord[] = [];
+      if (stored) {
+        try {
+          articles = JSON.parse(stored);
+        } catch(e) {}
+      }
+      
+      articles.push(record);
+      localStorage.setItem('watchtower-articles', JSON.stringify(articles));
+      window.dispatchEvent(new Event('articlesUpdated'));
+      
       return newId;
     } catch (err) {
-      console.error("Failed to save article to DB:", err);
-      // We don't block display if save fails, but we could show a toast
+      console.error("Failed to save article:", err);
       return null;
     }
   };
@@ -194,27 +174,38 @@ export default function App() {
     }
   };
 
-  // Save article when it changes to the DB
+  // Save article when it changes
   useEffect(() => {
-    if (activeArticleId && article && currentUser) {
+    if (activeArticleId && article) {
       const updateDB = async () => {
         try {
-          await setDoc(doc(db, "articles", activeArticleId), {
-            articleData: JSON.stringify(article),
-            userId: currentUser.uid,
-            title: article.title || "Untitled Article",
-            date: articleDate,
-            createdAt: Date.now() // Note: this shouldn't overwrite createdAt, but we actually want merge: true
-          }, { merge: true });
+          const stored = localStorage.getItem('watchtower-articles');
+          if (!stored) return;
+          
+          const articles: ArticleRecord[] = JSON.parse(stored);
+          const updated = articles.map(a => {
+            if (a.id === activeArticleId) {
+              return {
+                ...a,
+                articleData: JSON.stringify(article),
+                title: article.title || "Untitled Article",
+                date: articleDate
+              };
+            }
+            return a;
+          });
+          
+          localStorage.setItem('watchtower-articles', JSON.stringify(updated));
+          window.dispatchEvent(new Event('articlesUpdated'));
         } catch (err) {
-          console.error("Failed to auto-save to DB", err);
+          console.error("Failed to auto-save", err);
         }
       };
       // debounce slightly
       const timer = setTimeout(updateDB, 1500);
       return () => clearTimeout(timer);
     }
-  }, [article, activeArticleId, currentUser]);
+  }, [article, activeArticleId]);
 
   const handleUpdateComment = (id: string, newComment: string) => {
     if (!article) return;
@@ -444,37 +435,6 @@ export default function App() {
     setActiveTab(tab);
   };
 
-  if (!isAuthReady) {
-    return <div className="min-h-screen flex items-center justify-center bg-background text-foreground"><div className="animate-pulse text-muted-foreground">Loading...</div></div>;
-  }
-
-  if (!currentUser) {
-    return (
-      <div className="min-h-screen bg-background text-foreground font-sans flex items-center justify-center p-6">
-        <Card className="w-full max-w-sm border-border bg-card shadow-xl overflow-hidden">
-          <CardHeader className="text-center pb-4 border-b border-border/50 bg-muted/20">
-            <div className="w-16 h-16 mx-auto bg-primary/10 flex items-center justify-center rounded-2xl mb-4">
-              <BookOpen size={32} className="text-primary" />
-            </div>
-            <CardTitle className="text-2xl font-serif text-primary">Watchtower Study Assistant</CardTitle>
-            <CardDescription className="text-md">Sign in to save and sync your study articles</CardDescription>
-          </CardHeader>
-          <CardContent className="p-8 pb-10 flex flex-col items-center">
-            <Button size="lg" className="w-full text-md h-12 gap-3" onClick={handleSignIn}>
-              Continue with Google
-            </Button>
-            {authError && <p className="text-destructive mt-4 text-sm text-center">{authError}</p>}
-            {authError && authError.includes("popup") && (
-              <p className="text-muted-foreground mt-2 text-xs text-center">
-                Try opening the app in a new tab, as some devices block popups in the preview window.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   const formatText = (content: React.ReactNode, search: string, formatter: (match: string, index: number) => React.ReactNode): React.ReactNode => {
     if (!search) return content;
     
@@ -653,15 +613,6 @@ export default function App() {
             title="Import Saved .json Data"
           >
             <Upload size={20} />
-          </Button>
-          <Button 
-            variant="ghost" 
-            size="icon" 
-            onClick={() => signOut(auth)}
-            className="rounded-full hover:bg-muted text-muted-foreground hover:text-destructive"
-            title="Sign Out"
-          >
-            <LogOut size={20} />
           </Button>
           {article && (
             <Button
