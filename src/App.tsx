@@ -653,13 +653,25 @@ export default function App() {
 
               <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
                 <TabsContent value="study" className="space-y-6 outline-none">
-                  {article?.items.map((item, index) => (
-                    <motion.div
-                      key={item.id}
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: index * 0.1 }}
-                    >
+                  {article?.items.map((item, index) => {
+                    const showSubheading = item.subheading && (index === 0 || article.items[index - 1].subheading !== item.subheading);
+
+                    return (
+                      <React.Fragment key={item.id}>
+                        {showSubheading && (
+                          <div className="flex items-center gap-4 mt-12 mb-2">
+                            <Separator className="flex-1 bg-border" />
+                            <h3 className="text-lg md:text-xl font-bold uppercase tracking-[0.15em] text-foreground/80 whitespace-nowrap">
+                              {item.subheading}
+                            </h3>
+                            <Separator className="flex-1 bg-border" />
+                          </div>
+                        )}
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: index * 0.1 }}
+                        >
                       <Card className="border-border shadow-lg shadow-primary/5 bg-card overflow-hidden group">
                         <div className="absolute top-0 left-0 w-1 h-full bg-primary opacity-0 group-hover:opacity-100 transition-opacity" />
                         <CardHeader className="pb-3">
@@ -974,7 +986,9 @@ export default function App() {
                         </CardContent>
                       </Card>
                     </motion.div>
-                  ))}
+                    </React.Fragment>
+                    );
+                  })}
 
                   {article?.reviewQuestions && article.reviewQuestions.length > 0 && (
                     <div className="mt-12 space-y-8">

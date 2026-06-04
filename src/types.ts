@@ -11,6 +11,7 @@ export interface AdditionalNote {
 
 export interface StudyItem {
   id: string;
+  subheading?: string;
   question: string;
   paragraph: string;
   highlightedText: string;

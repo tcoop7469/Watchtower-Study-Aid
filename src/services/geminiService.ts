@@ -48,6 +48,7 @@ export async function processArticle(text: string): Promise<WatchtowerArticle> {
               type: Type.OBJECT,
               properties: {
                 id: { type: Type.STRING, description: "A unique ID for the item (e.g., 'q1')" },
+                subheading: { type: Type.STRING, description: "The subheading of the section this paragraph belongs to, if it exists. Subheadings group multiple paragraphs together." },
                 question: { type: Type.STRING, description: "The study question" },
                 paragraph: { type: Type.STRING, description: "The text of the paragraph associated with the question" },
                 highlightedText: { type: Type.STRING, description: "The specific sentence or phrase from the paragraph that directly answers the question or forms the basis of the comment. This MUST be an exact substring of the paragraph." },
