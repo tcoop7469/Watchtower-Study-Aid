@@ -1,0 +1,24 @@
+{
+  "entities": {
+    "ArticleRecord": {
+      "title": "Article Record",
+      "description": "A saved study article with optional cover and date",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "date": { "type": "string" },
+        "coverUrl": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "articleData": { "type": "string", "description": "JSON string of the WatchtowerArticle" }
+      },
+      "required": ["userId", "title", "createdAt", "articleData"]
+    }
+  },
+  "firestore": {
+    "articles/{articleId}": {
+      "schema": { "$ref": "#/entities/ArticleRecord" },
+      "description": "User's saved study articles"
+    }
+  }
+}

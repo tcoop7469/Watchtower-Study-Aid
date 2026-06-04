@@ -26,13 +26,17 @@ import {
   Sparkles,
   User,
   Plus,
+  Save,
   Image as ImageIcon,
   Type,
   X,
   Pin,
   PinOff,
   Settings,
-  Sliders
+  Sliders,
+  Library as LibraryIcon,
+  LogOut,
+  ImagePlus
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -46,14 +50,26 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { processArticle, regenerateComment } from "./services/geminiService";
 import { WatchtowerArticle, StudyItem } from "./types";
 import { cn } from "@/lib/utils";
+import { Library } from "./components/Library";
+import { auth, db } from "./services/firebase";
+import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, User as FirebaseUser } from "firebase/auth";
+import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 
 export default function App() {
+  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+
   const [inputText, setInputText] = useState("");
   const [article, setArticle] = useState<WatchtowerArticle | null>(null);
+  const [activeArticleId, setActiveArticleId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(false);
+  
+  // Dashboard fields
+  const [articleDate, setArticleDate] = useState("");
+
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
   const [collapsedUserComments, setCollapsedUserComments] = useState<Set<string>>(new Set());
   const [collapsedSuggestions, setCollapsedSuggestions] = useState<Set<string>>(new Set());
@@ -61,9 +77,17 @@ export default function App() {
   const [pinnedSuggestions, setPinnedSuggestions] = useState<Set<string>>(new Set());
   const [pinnedUserComments, setPinnedUserComments] = useState<Set<string>>(new Set());
   const [selectedScripture, setSelectedScripture] = useState<{ reference: string; text: string } | null>(null);
-  const [activeTab, setActiveTab] = useState("study");
+  const [activeTab, setActiveTab] = useState("import"); // 'import' is the default dashboard
   const [fontSizeParagraph, setFontSizeParagraph] = useState(16);
   const [fontSizeComment, setFontSizeComment] = useState(16);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+      setIsAuthReady(true);
+    });
+    return () => unsub();
+  }, []);
 
   // Initialize theme and font sizes from system preference or local storage
   useEffect(() => {
@@ -104,6 +128,26 @@ export default function App() {
     });
   };
 
+  const saveArticleToDB = async (parsedArticle: WatchtowerArticle) => {
+    if (!currentUser) return null;
+    const newId = Math.random().toString(36).substring(2, 10);
+    try {
+      const record = {
+        userId: currentUser.uid,
+        title: parsedArticle.title || "Untitled Article",
+        date: articleDate,
+        createdAt: Date.now(),
+        articleData: JSON.stringify(parsedArticle)
+      };
+      await setDoc(doc(db, "articles", newId), record);
+      return newId;
+    } catch (err) {
+      console.error("Failed to save article to DB:", err);
+      // We don't block display if save fails, but we could show a toast
+      return null;
+    }
+  };
+
   const handleImport = async () => {
     if (!inputText.trim()) return;
     setIsLoading(true);
@@ -117,13 +161,41 @@ export default function App() {
       ];
       setCollapsedSuggestions(new Set(allIds));
       setCollapsedNotes(new Set()); // New articles have no notes yet
+      
+      const newId = await saveArticleToDB(result);
+      if (newId) setActiveArticleId(newId);
+
+      setActiveTab("study");
       setInputText("");
+      setArticleDate("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "An unexpected error occurred");
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Save article when it changes to the DB
+  useEffect(() => {
+    if (activeArticleId && article && currentUser) {
+      const updateDB = async () => {
+        try {
+          await setDoc(doc(db, "articles", activeArticleId), {
+            articleData: JSON.stringify(article),
+            userId: currentUser.uid,
+            title: article.title || "Untitled Article",
+            date: articleDate,
+            createdAt: Date.now() // Note: this shouldn't overwrite createdAt, but we actually want merge: true
+          }, { merge: true });
+        } catch (err) {
+          console.error("Failed to auto-save to DB", err);
+        }
+      };
+      // debounce slightly
+      const timer = setTimeout(updateDB, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [article, activeArticleId, currentUser]);
 
   const handleUpdateComment = (id: string, newComment: string) => {
     if (!article) return;
@@ -342,14 +414,41 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  const reset = () => {
+  const reset = (tab: string = "import") => {
+    setActiveArticleId(null);
     setArticle(null);
     setInputText("");
     setError(null);
     setCollapsedSuggestions(new Set());
     setCollapsedNotes(new Set());
     setPinnedSuggestions(new Set());
+    setActiveTab(tab);
   };
+
+  if (!isAuthReady) {
+    return <div className="min-h-screen flex items-center justify-center bg-background text-foreground"><div className="animate-pulse text-muted-foreground">Loading...</div></div>;
+  }
+
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-background text-foreground font-sans flex items-center justify-center p-6">
+        <Card className="w-full max-w-sm border-border bg-card shadow-xl overflow-hidden">
+          <CardHeader className="text-center pb-4 border-b border-border/50 bg-muted/20">
+            <div className="w-16 h-16 mx-auto bg-primary/10 flex items-center justify-center rounded-2xl mb-4">
+              <BookOpen size={32} className="text-primary" />
+            </div>
+            <CardTitle className="text-2xl font-serif text-primary">Watchtower Study Assistant</CardTitle>
+            <CardDescription className="text-md">Sign in to save and sync your study articles</CardDescription>
+          </CardHeader>
+          <CardContent className="p-8 pb-10 flex flex-col items-center">
+            <Button size="lg" className="w-full text-md h-12 gap-3" onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}>
+              Continue with Google
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const formatText = (content: React.ReactNode, search: string, formatter: (match: string, index: number) => React.ReactNode): React.ReactNode => {
     if (!search) return content;
@@ -454,39 +553,62 @@ export default function App() {
           <BookOpen size={22} />
         </div>
         
-        {article && (
-          <nav className="flex flex-col gap-4">
-            {[
-              { id: "study", icon: Layout, label: "Study" },
-              { id: "article", icon: FileText, label: "Article" },
-              { id: "scriptures", icon: BookOpen, label: "Scriptures" },
-              { id: "settings", icon: Settings, label: "Settings" }
-            ].map((nav) => (
-              <button
-                key={nav.id}
-                onClick={() => setActiveTab(nav.id)}
-                className={cn(
-                  "p-3 rounded-xl transition-all duration-200 group relative",
-                  activeTab === nav.id 
-                    ? "bg-primary text-primary-foreground shadow-md shadow-primary/20" 
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                )}
-                title={nav.label}
-              >
-                <nav.icon size={22} />
-                <span className="absolute left-full ml-4 px-2 py-1 rounded bg-popover text-popover-foreground text-xs font-medium opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap shadow-md z-50">
-                  {nav.label}
-                </span>
-                {activeTab === nav.id && (
-                  <motion.div 
-                    layoutId="active-indicator"
-                    className="absolute -right-[2px] top-1/4 bottom-1/4 w-1 bg-primary rounded-l-full"
-                  />
-                )}
-              </button>
-            ))}
-          </nav>
-        )}
+        <nav className="flex flex-col gap-4">
+          <button
+            onClick={() => reset("library")}
+            className={cn(
+              "p-3 rounded-xl transition-all duration-200 group relative",
+              activeTab === "library" || (!article && activeTab !== "import")
+                ? "bg-primary text-primary-foreground shadow-md shadow-primary/20" 
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+            )}
+            title="Dashboard"
+          >
+            <LibraryIcon size={22} />
+            <span className="absolute left-full ml-4 px-2 py-1 rounded bg-popover text-popover-foreground text-xs font-medium opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap shadow-md z-50">
+              Dashboard
+            </span>
+          </button>
+          <button
+            onClick={() => reset("import")}
+            className={cn(
+              "p-3 rounded-xl transition-all duration-200 group relative",
+              activeTab === "import"
+                ? "bg-primary text-primary-foreground shadow-md shadow-primary/20" 
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+            )}
+            title="Import New"
+          >
+            <Plus size={22} />
+            <span className="absolute left-full ml-4 px-2 py-1 rounded bg-popover text-popover-foreground text-xs font-medium opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap shadow-md z-50">
+              Import New
+            </span>
+          </button>
+
+          {[
+            { id: "study", icon: Layout, label: "Study" },
+            { id: "article", icon: FileText, label: "Article" },
+            { id: "scriptures", icon: BookOpen, label: "Scriptures" },
+            { id: "settings", icon: Settings, label: "Settings" }
+          ].map((nav) => (
+            <button
+              key={nav.id}
+              onClick={() => setActiveTab(nav.id)}
+              className={cn(
+                "p-3 rounded-xl transition-all duration-200 group relative",
+                activeTab === nav.id 
+                  ? "bg-primary text-primary-foreground shadow-md shadow-primary/20" 
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+              title={nav.label}
+            >
+              <nav.icon size={22} />
+              <span className="absolute left-full ml-4 px-2 py-1 rounded bg-popover text-popover-foreground text-xs font-medium opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap shadow-md z-50">
+                {nav.label}
+              </span>
+            </button>
+          ))}
+        </nav>
 
         <div className="mt-auto flex flex-col gap-4">
           <Button 
@@ -501,11 +623,20 @@ export default function App() {
           <Button
             variant="ghost"
             size="icon"
-            className="rounded-full hover:bg-muted"
+            className="rounded-full hover:bg-muted text-muted-foreground"
             onClick={() => document.getElementById('import-data')?.click()}
-            title="Import Article"
+            title="Import Saved .json Data"
           >
             <Upload size={20} />
+          </Button>
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            onClick={() => signOut(auth)}
+            className="rounded-full hover:bg-muted text-muted-foreground hover:text-destructive"
+            title="Sign Out"
+          >
+            <LogOut size={20} />
           </Button>
           {article && (
             <Button
@@ -541,11 +672,19 @@ export default function App() {
               />
               {article && (
                 <>
+                  {!activeArticleId && (
+                    <Button variant="default" size="sm" onClick={async () => {
+                      const newId = await saveArticleToDB(article);
+                      if (newId) setActiveArticleId(newId);
+                    }} className="hidden md:flex gap-2">
+                      <Save size={14} /> Save to Library
+                    </Button>
+                  )}
                   <Button variant="outline" size="sm" onClick={copyAllComments} className="hidden sm:flex gap-2 border-border hover:bg-muted">
                     {copiedId === "all" ? <Check size={14} /> : <Copy size={14} />}
                     {copiedId === "all" ? "Copied All" : "Copy All"}
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={reset} className="text-destructive hover:text-destructive hover:bg-destructive/10">
+                  <Button variant="ghost" size="sm" onClick={() => reset()} className="text-destructive hover:text-destructive hover:bg-destructive/10">
                     <Trash2 size={14} />
                   </Button>
                 </>
@@ -556,7 +695,35 @@ export default function App() {
 
         <main className="max-w-4xl mx-auto w-full p-6 pb-24">
         <AnimatePresence mode="wait">
-          {!article && !isLoading ? (
+          {!article && !isLoading && activeTab === "library" ? (
+            <motion.div
+              key="library-view"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+            >
+              <Library onSelectArticle={(imported, id) => {
+                setArticle(imported);
+                setActiveArticleId(id);
+                
+                const allIds = [
+                  ...imported.items.map(item => item.id),
+                  ...(imported.reviewQuestions || []).map(q => q.id)
+                ];
+                setCollapsedSuggestions(new Set(allIds));
+                
+                const allNoteIds: string[] = [];
+                imported.items.forEach(item => {
+                  item.additionalNotes?.forEach(note => {
+                    allNoteIds.push(note.id);
+                  });
+                });
+                setCollapsedNotes(new Set(allNoteIds));
+                
+                setActiveTab("study");
+              }} />
+            </motion.div>
+          ) : !article && !isLoading && activeTab === "import" ? (
             <motion.div
               key="import-view"
               initial={{ opacity: 0, y: 20 }}
@@ -572,6 +739,19 @@ export default function App() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="p-6 space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="articleDate" className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Study Date</Label>
+                      <Input
+                        id="articleDate"
+                        type="date"
+                        value={articleDate}
+                        onChange={(e) => setArticleDate(e.target.value)}
+                        className="bg-background border-border"
+                      />
+                    </div>
+                  </div>
+
                   <div className="relative">
                     <Textarea
                       placeholder="Paste article text here... (e.g., Title, Paragraphs, and Questions)"
@@ -617,6 +797,26 @@ export default function App() {
                     <p className="text-xs text-muted-foreground leading-relaxed">{feature.desc}</p>
                   </div>
                 ))}
+              </div>
+            </motion.div>
+          ) : !article && !isLoading ? (
+            <motion.div
+              key="empty-state"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex flex-col items-center justify-center min-h-[400px] text-center space-y-4"
+            >
+              <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center text-muted-foreground">
+                <FileText size={32} />
+              </div>
+              <h2 className="text-xl font-semibold">No Article Selected</h2>
+              <p className="text-muted-foreground max-w-sm">
+                Please select an article from your Dashboard or import a new one to begin your study.
+              </p>
+              <div className="flex gap-4 mt-6">
+                <Button onClick={() => setActiveTab("library")}>Go to Dashboard</Button>
+                <Button variant="outline" className="border-border hover:bg-muted" onClick={() => setActiveTab("import")}>Import New</Button>
               </div>
             </motion.div>
           ) : isLoading ? (
@@ -1286,7 +1486,7 @@ export default function App() {
               <div className="flex justify-center pt-8">
                 <Button 
                   variant="outline" 
-                  onClick={reset}
+                  onClick={() => reset()}
                   className="border-border text-foreground hover:bg-primary hover:text-primary-foreground transition-colors"
                 >
                   Start New Study
