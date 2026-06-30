@@ -600,6 +600,133 @@ export default function App() {
     return content;
   };
 
+  const renderSettingsContent = () => {
+    const handleClearLibrary = () => {
+      if (window.confirm("Are you sure you want to clear your local Library? This will permanently delete all saved study articles.")) {
+        localStorage.removeItem('watchtower-articles');
+        window.dispatchEvent(new Event('articlesUpdated'));
+        alert("Library cleared successfully.");
+      }
+    };
+
+    return (
+      <Card className="border-border bg-card shadow-xl shadow-primary/5">
+        <CardHeader className="border-b border-border bg-muted/30">
+          <CardTitle className="text-xl font-serif italic text-primary">Display & App Settings</CardTitle>
+          <CardDescription>Customize the appearance and behavior of your study assistant.</CardDescription>
+        </CardHeader>
+        <CardContent className="p-6 space-y-8">
+          {/* Theme Settings */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Sun className="text-primary" size={18} />
+              <h3 className="font-semibold">App Theme</h3>
+            </div>
+            <div className="flex items-center justify-between p-4 rounded-xl bg-muted/30 border border-border">
+              <div>
+                <p className="text-sm font-medium">Dark Mode</p>
+                <p className="text-xs text-muted-foreground">Toggle between light and dark display mode.</p>
+              </div>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={toggleDarkMode}
+                className="gap-2 border-border"
+              >
+                {isDarkMode ? <Sun size={16} /> : <Moon size={16} />}
+                {isDarkMode ? "Switch to Light Theme" : "Switch to Dark Theme"}
+              </Button>
+            </div>
+          </div>
+
+          <Separator className="bg-border" />
+
+          {/* Font Sizes Settings */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Sliders className="text-primary" size={18} />
+              <h3 className="font-semibold">Text Size</h3>
+            </div>
+            
+            <div className="grid gap-6 sm:grid-cols-2 max-w-xl">
+              <div className="space-y-2">
+                <Label htmlFor="p-size" className="text-xs uppercase tracking-widest font-bold text-muted-foreground">Paragraph Text Size</Label>
+                <div className="flex items-center gap-4">
+                  <Input 
+                    id="p-size" 
+                    type="number" 
+                    value={fontSizeParagraph} 
+                    onChange={(e) => setFontSizeParagraph(parseInt(e.target.value) || 16)}
+                    className="w-24 bg-background"
+                    min="12"
+                    max="32"
+                  />
+                  <span className="text-sm text-muted-foreground">pixels</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="c-size" className="text-xs uppercase tracking-widest font-bold text-muted-foreground">Comment Text Size</Label>
+                <div className="flex items-center gap-4">
+                  <Input 
+                    id="c-size" 
+                    type="number" 
+                    value={fontSizeComment} 
+                    onChange={(e) => setFontSizeComment(parseInt(e.target.value) || 16)}
+                    className="w-24 bg-background"
+                    min="12"
+                    max="32"
+                  />
+                  <span className="text-sm text-muted-foreground">pixels</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <Separator className="bg-border" />
+
+          {/* Live Preview */}
+          <div className="p-4 rounded-xl bg-muted/30 border border-border space-y-3">
+            <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Live Preview</h4>
+            <div className="space-y-2">
+              <div className="p-3 rounded-lg bg-card border border-border" style={{ fontSize: `${fontSizeParagraph}px` }}>
+                This is a sample paragraph text.
+              </div>
+              <div className="p-3 rounded-lg bg-primary/10 border border-primary/20 text-primary" style={{ fontSize: `${fontSizeComment}px`, fontStyle: 'italic' }}>
+                This is a sample AI suggestion or user comment text.
+              </div>
+            </div>
+          </div>
+
+          <Separator className="bg-border" />
+
+          {/* Library Settings */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Trash2 className="text-destructive" size={18} />
+              <h3 className="font-semibold text-destructive">Danger Zone</h3>
+            </div>
+            <div className="flex items-center justify-between p-4 rounded-xl bg-destructive/5 border border-destructive/20">
+              <div>
+                <p className="text-sm font-medium text-destructive">Clear Saved Articles</p>
+                <p className="text-xs text-muted-foreground">Permanently delete all imported articles and backups stored in this browser.</p>
+              </div>
+              <Button 
+                variant="destructive" 
+                size="sm"
+                onClick={handleClearLibrary}
+                className="gap-2"
+              >
+                <Trash2 size={16} />
+                Clear Library
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground font-sans selection:bg-primary/20 transition-colors duration-300 flex">
       {/* Sidebar Navigation */}
@@ -844,6 +971,15 @@ export default function App() {
                   </div>
                 ))}
               </div>
+            </motion.div>
+          ) : !article && !isLoading && activeTab === "settings" ? (
+            <motion.div
+              key="settings-view-no-article"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+            >
+              {renderSettingsContent()}
             </motion.div>
           ) : !article && !isLoading ? (
             <motion.div
@@ -1500,66 +1636,7 @@ export default function App() {
                 </TabsContent>
 
                 <TabsContent value="settings" className="outline-none">
-                  <Card className="border-border bg-card shadow-xl shadow-primary/5">
-                    <CardHeader className="border-b border-border bg-muted/30">
-                      <CardTitle className="text-xl font-serif italic text-primary">Display Settings</CardTitle>
-                      <CardDescription>Customize the appearance of your study assistant.</CardDescription>
-                    </CardHeader>
-                    <CardContent className="p-6 space-y-8">
-                      <div className="space-y-4">
-                        <div className="flex items-center gap-2 mb-4">
-                          <Sliders className="text-primary" size={18} />
-                          <h3 className="font-semibold">Text Size</h3>
-                        </div>
-                        
-                        <div className="grid gap-6 max-w-sm">
-                          <div className="space-y-2">
-                            <Label htmlFor="p-size" className="text-xs uppercase tracking-widest font-bold text-muted-foreground">Paragraph Text Size</Label>
-                            <div className="flex items-center gap-4">
-                              <Input 
-                                id="p-size" 
-                                type="number" 
-                                value={fontSizeParagraph} 
-                                onChange={(e) => setFontSizeParagraph(parseInt(e.target.value) || 16)}
-                                className="w-24"
-                                min="12"
-                                max="32"
-                              />
-                              <span className="text-sm text-muted-foreground">pixels</span>
-                            </div>
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label htmlFor="c-size" className="text-xs uppercase tracking-widest font-bold text-muted-foreground">Comment Text Size</Label>
-                            <div className="flex items-center gap-4">
-                              <Input 
-                                id="c-size" 
-                                type="number" 
-                                value={fontSizeComment} 
-                                onChange={(e) => setFontSizeComment(parseInt(e.target.value) || 16)}
-                                className="w-24"
-                                min="12"
-                                max="32"
-                              />
-                              <span className="text-sm text-muted-foreground">pixels</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="p-4 rounded-xl bg-muted/30 border border-border space-y-3">
-                        <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Live Preview</h4>
-                        <div className="space-y-2">
-                          <div className="p-3 rounded-lg bg-card border border-border" style={{ fontSize: `${fontSizeParagraph}px` }}>
-                            This is a sample paragraph text.
-                          </div>
-                          <div className="p-3 rounded-lg bg-primary/10 border border-primary/20 text-primary" style={{ fontSize: `${fontSizeComment}px`, fontStyle: 'italic' }}>
-                            This is a sample AI suggestion or user comment text.
-                          </div>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
+                  {renderSettingsContent()}
                 </TabsContent>
               </Tabs>
 
