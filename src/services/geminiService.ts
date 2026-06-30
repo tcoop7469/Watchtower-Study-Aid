@@ -1,13 +1,17 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { WatchtowerArticle } from "../types";
+import { WatchtowerArticle, SuggestedCommentOption } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 const SYSTEM_INSTRUCTION = `
 You are an expert assistant for Jehovah's Witnesses preparing for their weekly Watchtower study.
 Your task is to parse a Watchtower article text and extract study questions and their corresponding paragraphs.
-For each question, you must generate a concise, meaningful, and faith-strengthening comment based on the information in the associated paragraph.
-The comment should sound natural, as if spoken by a person in a congregation meeting.
+For each question, you must generate a list of concise, meaningful, and faith-strengthening suggested comments based on the information in the associated paragraph.
+You can generate up to 3 suggested comments per paragraph (minimum of 1). 
+- Comment 1 (Default): A concise general comment based on the paragraph.
+- Comment 2 & 3 (Optional): Distinct alternative comments that specifically incorporate and highlight the Bible scriptures cited/referenced in the paragraph, weaving them naturally into the comment.
+- Only generate the maximum of 3 comments if the paragraph has sufficient information and scripture references to support multiple high-quality, distinct comments. Otherwise, provide fewer (1 or 2).
+The comments should sound natural, as if spoken by a person in a congregation meeting.
 Avoid overly long comments; aim for 2-3 sentences.
 
 CRITICAL:
@@ -65,10 +69,22 @@ export async function processArticle(text: string): Promise<WatchtowerArticle> {
                     required: ["reference", "text"]
                   }
                 },
-                suggestedComment: { type: Type.STRING, description: "A suggested comment for the question based on the paragraph" },
+                suggestedComment: { type: Type.STRING, description: "A suggested comment for the question based on the paragraph (this should be the same as the first element of suggestedComments)" },
+                suggestedComments: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      comment: { type: Type.STRING, description: "The text of the suggested comment" },
+                      scriptureRef: { type: Type.STRING, description: "If this comment is scripture-focused, provide the exact scripture reference (e.g., 'Matthew 24:14') that this comment specifically incorporates and highlights. Leave undefined or empty for a general paragraph comment." }
+                    },
+                    required: ["comment"]
+                  },
+                  description: "A list of up to 3 suggested comments. Comment 1 should be a general response based on the paragraph (same as suggestedComment). Comments 2 and 3 should be distinct alternatives that specifically incorporate and highlight the Bible scriptures cited/referenced in the paragraph, weaving them naturally into the comment, with scriptureRef specified."
+                },
                 userComment: { type: Type.STRING, description: "Initially an empty string" }
               },
-              required: ["id", "question", "paragraph", "highlightedText", "scriptures", "readScriptures", "scriptureTexts", "suggestedComment", "userComment"]
+              required: ["id", "question", "paragraph", "highlightedText", "scriptures", "readScriptures", "scriptureTexts", "suggestedComment", "suggestedComments", "userComment"]
             }
           },
           reviewQuestions: {
@@ -99,7 +115,7 @@ export async function processArticle(text: string): Promise<WatchtowerArticle> {
   }
 }
 
-export async function regenerateComment(question: string, paragraph: string): Promise<string> {
+export async function regenerateComment(question: string, paragraph: string): Promise<SuggestedCommentOption[]> {
   if (!process.env.GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY is not configured.");
   }
@@ -109,13 +125,32 @@ export async function regenerateComment(question: string, paragraph: string): Pr
     contents: [
       {
         role: "user",
-        parts: [{ text: `Based on the following paragraph, generate a concise, meaningful, and faith-strengthening comment for the question: "${question}"\n\nParagraph: ${paragraph}` }]
+        parts: [{ text: `Based on the following paragraph, generate a list of concise, meaningful, and faith-strengthening suggested comments for the question: "${question}"\n\nParagraph: ${paragraph}` }]
       }
     ],
     config: {
       systemInstruction: SYSTEM_INSTRUCTION,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            comment: { type: Type.STRING, description: "The text of the suggested comment" },
+            scriptureRef: { type: Type.STRING, description: "If this comment is scripture-focused, provide the exact scripture reference (e.g., 'Matthew 24:14') that this comment specifically incorporates and highlights. Otherwise, leave empty or omit." }
+          },
+          required: ["comment"]
+        },
+        description: "A list of up to 3 suggested comments. Comment 1 should be a general response. Comments 2 & 3 should be distinct alternatives specifically incorporating/explaining any cited scriptures from the paragraph. If there is only one scripture or very little information, only generate 1 or 2 high-quality comments."
+      }
     }
   });
 
-  return response.text?.trim() || "Failed to generate comment.";
+  try {
+    const comments = JSON.parse(response.text || "[]") as SuggestedCommentOption[];
+    return Array.isArray(comments) && comments.length > 0 ? comments : [{ comment: "Failed to generate comment." }];
+  } catch (error) {
+    console.error("Failed to parse regenerated comments:", error);
+    return [{ comment: response.text?.trim() || "Failed to generate comment." }];
+  }
 }

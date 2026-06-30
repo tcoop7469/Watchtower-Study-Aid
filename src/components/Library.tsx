@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Trash2, Image as ImageIcon, Calendar, Edit2, X, Check } from 'lucide-react';
+import { Trash2, Image as ImageIcon, Calendar, Edit2, X, Check, Download } from 'lucide-react';
 import { WatchtowerArticle } from '../types';
 
 export interface ArticleRecord {
@@ -116,6 +116,42 @@ export function Library({ onSelectArticle }: { onSelectArticle: (article: Watcht
     setEditingId(null);
   };
 
+  const exportArticle = (e: React.MouseEvent, record: ArticleRecord) => {
+    e.stopPropagation();
+    try {
+      const parsed = JSON.parse(record.articleData);
+      // Ensure we export it parsed as a nice WatchtowerArticle json representation
+      const dataStr = JSON.stringify(parsed, null, 2);
+      const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
+      
+      const exportFileDefaultName = `watchtower-study-${record.title.replace(/\s+/g, '-').toLowerCase()}.json`;
+      
+      const linkElement = document.createElement('a');
+      linkElement.setAttribute('href', dataUri);
+      linkElement.setAttribute('download', exportFileDefaultName);
+      linkElement.click();
+    } catch (err) {
+      console.error("Failed to export article data:", err);
+    }
+  };
+
+  const exportAllArticles = () => {
+    if (articles.length === 0) return;
+    try {
+      const dataStr = JSON.stringify(articles, null, 2);
+      const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
+      
+      const exportFileDefaultName = `watchtower-study-library-backup.json`;
+      
+      const linkElement = document.createElement('a');
+      linkElement.setAttribute('href', dataUri);
+      linkElement.setAttribute('download', exportFileDefaultName);
+      linkElement.click();
+    } catch (err) {
+      console.error("Failed to export library backup:", err);
+    }
+  };
+
   const upcomingArticles = articles.filter(a => !a.date || new Date(a.date) >= new Date(new Date().setHours(0,0,0,0)));
   const previousArticles = articles.filter(a => a.date && new Date(a.date) < new Date(new Date().setHours(0,0,0,0)));
 
@@ -182,6 +218,15 @@ export function Library({ onSelectArticle }: { onSelectArticle: (article: Watcht
                   variant="ghost" 
                   size="icon" 
                   className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10" 
+                  onClick={(e) => exportArticle(e, record)}
+                  title="Export Article JSON"
+                >
+                  <Download size={16} />
+                </Button>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10" 
                   onClick={(e) => startEditing(e, record)}
                   title="Edit Article"
                 >
@@ -206,6 +251,24 @@ export function Library({ onSelectArticle }: { onSelectArticle: (article: Watcht
 
   return (
     <div className="space-y-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border pb-4">
+        <div>
+          <h1 className="text-3xl font-serif text-primary italic">My Library</h1>
+          <p className="text-sm text-muted-foreground">Manage and study your processed Watchtower articles</p>
+        </div>
+        {articles.length > 0 && (
+          <Button 
+            onClick={exportAllArticles} 
+            variant="outline" 
+            size="sm" 
+            className="flex items-center gap-2 border-border hover:bg-muted"
+          >
+            <Download size={14} />
+            Export Library Backup (.json)
+          </Button>
+        )}
+      </div>
+
       <div>
         <h2 className="text-xl font-bold tracking-tight mb-4 flex items-center gap-2">Upcoming & Current</h2>
         {upcomingArticles.length > 0 ? renderArticleList(upcomingArticles) : <p className="text-muted-foreground text-sm italic">No upcoming articles.</p>}

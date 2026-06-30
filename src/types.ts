@@ -9,6 +9,11 @@ export interface AdditionalNote {
   content: string;
 }
 
+export interface SuggestedCommentOption {
+  comment: string;
+  scriptureRef?: string;
+}
+
 export interface StudyItem {
   id: string;
   subheading?: string;
@@ -19,6 +24,7 @@ export interface StudyItem {
   readScriptures: string[];
   scriptureTexts: ScriptureContent[];
   suggestedComment: string;
+  suggestedComments?: (string | SuggestedCommentOption)[];
   userComment: string;
   additionalNotes?: AdditionalNote[];
 }

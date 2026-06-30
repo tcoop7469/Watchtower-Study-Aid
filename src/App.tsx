@@ -48,7 +48,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { processArticle, regenerateComment } from "./services/geminiService";
-import { WatchtowerArticle, StudyItem } from "./types";
+import { WatchtowerArticle, StudyItem, SuggestedCommentOption } from "./types";
 import { cn } from "@/lib/utils";
 import { Library } from "./components/Library";
 import { ArticleRecord } from "./components/Library"; // We'll need to reuse this interface
@@ -224,11 +224,11 @@ export default function App() {
     if (!article) return;
     setRegeneratingId(id);
     try {
-      const newComment = await regenerateComment(question, paragraph);
+      const newComments = await regenerateComment(question, paragraph);
       setArticle({
         ...article,
         items: article.items.map(item => 
-          item.id === id ? { ...item, suggestedComment: newComment } : item
+          item.id === id ? { ...item, suggestedComment: newComments[0]?.comment || "", suggestedComments: newComments } : item
         )
       });
     } catch (err) {
@@ -276,19 +276,46 @@ export default function App() {
     reader.onload = (e) => {
       try {
         const content = e.target?.result as string;
-        const importedArticle = JSON.parse(content) as WatchtowerArticle;
+        const parsed = JSON.parse(content);
         
-        // Basic validation
-        if (importedArticle.title && Array.isArray(importedArticle.items)) {
-          setArticle({
-            ...importedArticle,
-            reviewQuestions: importedArticle.reviewQuestions || []
-          });
-          setCollapsedSuggestions(new Set(importedArticle.items.map(item => item.id)));
+        if (Array.isArray(parsed)) {
+          // It's a library backup! Let's import all these into the local storage
+          const stored = localStorage.getItem('watchtower-articles');
+          let existing: ArticleRecord[] = [];
+          if (stored) {
+            try {
+              existing = JSON.parse(stored);
+            } catch (e) {}
+          }
           
-          // Collapse all existing additional notes
+          // Merge avoiding identical IDs, update or append
+          const merged = [...existing];
+          parsed.forEach((importedItem: any) => {
+            if (importedItem.id && importedItem.title && importedItem.articleData) {
+              const idx = merged.findIndex(item => item.id === importedItem.id);
+              if (idx > -1) {
+                merged[idx] = importedItem; // Overwrite
+              } else {
+                merged.push(importedItem); // Append
+              }
+            }
+          });
+          
+          localStorage.setItem('watchtower-articles', JSON.stringify(merged));
+          window.dispatchEvent(new Event('articlesUpdated'));
+          setError(null);
+          alert(`Successfully imported backup: ${parsed.length} articles added/updated in your Library.`);
+          setActiveTab("library");
+        } else if (parsed && parsed.title && Array.isArray(parsed.items)) {
+          // It's a single article
+          setArticle({
+            ...parsed,
+            reviewQuestions: parsed.reviewQuestions || []
+          });
+          setCollapsedSuggestions(new Set(parsed.items.map(item => item.id)));
+          
           const allNoteIds: string[] = [];
-          importedArticle.items.forEach(item => {
+          parsed.items.forEach(item => {
             item.additionalNotes?.forEach(note => {
               allNoteIds.push(note.id);
             });
@@ -296,15 +323,58 @@ export default function App() {
           setCollapsedNotes(new Set(allNoteIds));
           
           setError(null);
+          // Auto-save this single imported article into our local storage library as well if it has an activeArticleId or prompt for save.
+          // To be helpful, let's also save it to Library so they never lose it
+          saveArticleToStorage(parsed);
+          setActiveTab("study");
         } else {
-          setError("Invalid study data file.");
+          setError("Invalid study data or backup file.");
         }
       } catch (err) {
+        console.error(err);
         setError("Failed to parse study data file.");
       }
     };
     reader.readAsText(file);
     event.target.value = '';
+  };
+
+  const saveArticleToStorage = async (parsedArticle: WatchtowerArticle) => {
+    // Determine if this article is already in library, otherwise create new record
+    try {
+      const stored = localStorage.getItem('watchtower-articles');
+      let articles: ArticleRecord[] = [];
+      if (stored) {
+        try {
+          articles = JSON.parse(stored);
+        } catch(e) {}
+      }
+
+      // Check if title already exists to avoid duplication
+      const existingIdx = articles.findIndex(a => a.title === parsedArticle.title);
+      if (existingIdx > -1) {
+        setActiveArticleId(articles[existingIdx].id);
+        return;
+      }
+
+      const newId = Math.random().toString(36).substring(2, 10);
+      const record: ArticleRecord = {
+        id: newId,
+        userId: "local-user",
+        title: parsedArticle.title || "Untitled Article",
+        date: articleDate || "",
+        createdAt: Date.now(),
+        articleData: JSON.stringify(parsedArticle),
+        coverUrl: ""
+      };
+      
+      articles.push(record);
+      localStorage.setItem('watchtower-articles', JSON.stringify(articles));
+      window.dispatchEvent(new Event('articlesUpdated'));
+      setActiveArticleId(newId);
+    } catch (e) {
+      console.error("Failed to auto-save single imported article", e);
+    }
   };
 
   const toggleSuggestion = (id: string) => {
@@ -1025,20 +1095,54 @@ export default function App() {
                                       className="overflow-hidden"
                                     >
                                       <div className="p-4 space-y-3">
-                                        <div className="p-3 rounded-lg bg-background/80 border border-border/50 leading-relaxed text-foreground/80 shadow-sm" style={{ fontSize: `${fontSizeComment}px` }}>
-                                          {item.suggestedComment}
-                                        </div>
-                                        <div className="flex justify-end">
-                                          <Button 
-                                            variant="outline" 
-                                            size="sm" 
-                                            className="text-[10px] h-7 px-2 gap-1.5 border-border hover:bg-primary hover:text-primary-foreground"
-                                            onClick={() => copySuggestionToUser(item.id, item.suggestedComment)}
-                                          >
-                                            <Copy size={10} />
-                                            Use this suggestion
-                                          </Button>
-                                        </div>
+                                        {(() => {
+                                          const suggestions = item.suggestedComments && item.suggestedComments.length > 0 
+                                            ? item.suggestedComments 
+                                            : [item.suggestedComment];
+                                          
+                                          return (
+                                            <div className="space-y-3 w-full">
+                                              {suggestions.map((commentOption, sIdx) => {
+                                                const isObj = typeof commentOption === 'object' && commentOption !== null;
+                                                const commentText = isObj ? (commentOption as SuggestedCommentOption).comment : (commentOption as string);
+                                                const scriptureRef = isObj ? (commentOption as SuggestedCommentOption).scriptureRef : undefined;
+                                                
+                                                return (
+                                                  <div 
+                                                    key={`${item.id}-suggestion-${sIdx}`} 
+                                                    className="p-3.5 rounded-xl bg-background border border-border/60 hover:border-amber-500/40 hover:bg-amber-500/[0.01] transition-all leading-relaxed text-foreground/80 shadow-sm flex flex-col gap-2 group/sugg relative"
+                                                  >
+                                                    <div className="flex items-center justify-between text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+                                                      <span className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-semibold flex-wrap">
+                                                        <span>Comment Option {sIdx + 1}</span>
+                                                        {sIdx === 0 && <span className="text-[9px] bg-amber-500/15 px-1 py-0.2 rounded font-normal text-amber-700 dark:text-amber-300">General</span>}
+                                                        {sIdx > 0 && <span className="text-[9px] bg-emerald-500/15 px-1 py-0.2 rounded font-normal text-emerald-700 dark:text-emerald-400">Scripture Focus</span>}
+                                                        {scriptureRef && (
+                                                          <span className="text-[9px] bg-primary/10 border border-primary/20 text-primary px-1.5 py-0.5 rounded font-medium flex items-center gap-1 normal-case font-sans">
+                                                            <BookOpen size={10} />
+                                                            {scriptureRef}
+                                                          </span>
+                                                        )}
+                                                      </span>
+                                                      <Button 
+                                                        variant="ghost" 
+                                                        size="sm" 
+                                                        className="text-[10px] h-6 px-2 gap-1 border-border/40 hover:bg-primary hover:text-primary-foreground opacity-70 group-hover/sugg:opacity-100 transition-opacity"
+                                                        onClick={() => copySuggestionToUser(item.id, commentText)}
+                                                      >
+                                                        <Copy size={10} />
+                                                        Use Comment {sIdx + 1}
+                                                      </Button>
+                                                    </div>
+                                                    <div style={{ fontSize: `${fontSizeComment}px` }} className="leading-relaxed">
+                                                      {commentText}
+                                                    </div>
+                                                  </div>
+                                                );
+                                              })}
+                                            </div>
+                                          );
+                                        })()}
                                       </div>
                                     </motion.div>
                                   )}
