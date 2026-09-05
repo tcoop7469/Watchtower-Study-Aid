@@ -36,7 +36,8 @@ import {
   Sliders,
   Library as LibraryIcon,
   LogOut,
-  ImagePlus
+  ImagePlus,
+  Calendar
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -50,8 +51,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { processArticle, regenerateComment } from "./services/geminiService";
 import { WatchtowerArticle, StudyItem, SuggestedCommentOption } from "./types";
 import { cn } from "@/lib/utils";
-import { Library } from "./components/Library";
-import { ArticleRecord } from "./components/Library"; // We'll need to reuse this interface
+import { Library, ArticleRecord, formatDisplayDate } from "./components/Library";
 
 export default function App() {
   const [inputText, setInputText] = useState("");
@@ -115,16 +115,21 @@ export default function App() {
     });
   };
 
-  const saveArticleToDB = async (parsedArticle: WatchtowerArticle) => {
+  const saveArticleToDB = async (parsedArticle: WatchtowerArticle, dateOverride?: string) => {
     const newId = Math.random().toString(36).substring(2, 10);
     try {
+      const resolvedDate = dateOverride !== undefined ? dateOverride : (articleDate || parsedArticle.studyDate || "");
+      const articleWithDate: WatchtowerArticle = {
+        ...parsedArticle,
+        studyDate: resolvedDate
+      };
       const record: ArticleRecord = {
         id: newId,
         userId: "local-user",
         title: parsedArticle.title || "Untitled Article",
-        date: articleDate,
+        date: resolvedDate,
         createdAt: Date.now(),
-        articleData: JSON.stringify(parsedArticle),
+        articleData: JSON.stringify(articleWithDate),
         coverUrl: ""
       };
       
@@ -153,20 +158,21 @@ export default function App() {
     setError(null);
     try {
       const result = await processArticle(inputText);
+      result.studyDate = articleDate;
       setArticle(result);
       const allIds = [
         ...result.items.map(item => item.id),
         ...result.reviewQuestions.map(q => q.id)
       ];
       setCollapsedSuggestions(new Set(allIds));
+      setCollapsedUserComments(new Set(allIds));
       setCollapsedNotes(new Set()); // New articles have no notes yet
       
-      const newId = await saveArticleToDB(result);
+      const newId = await saveArticleToDB(result, articleDate);
       if (newId) setActiveArticleId(newId);
 
       setActiveTab("study");
       setInputText("");
-      setArticleDate("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "An unexpected error occurred");
     } finally {
@@ -185,11 +191,16 @@ export default function App() {
           const articles: ArticleRecord[] = JSON.parse(stored);
           const updated = articles.map(a => {
             if (a.id === activeArticleId) {
+              const resolvedDate = articleDate || article.studyDate || a.date || "";
+              const articleWithDate: WatchtowerArticle = {
+                ...article,
+                studyDate: resolvedDate
+              };
               return {
                 ...a,
-                articleData: JSON.stringify(article),
+                articleData: JSON.stringify(articleWithDate),
                 title: article.title || "Untitled Article",
-                date: articleDate
+                date: resolvedDate
               };
             }
             return a;
@@ -202,10 +213,10 @@ export default function App() {
         }
       };
       // debounce slightly
-      const timer = setTimeout(updateDB, 1500);
+      const timer = setTimeout(updateDB, 1000);
       return () => clearTimeout(timer);
     }
-  }, [article, activeArticleId]);
+  }, [article, activeArticleId, articleDate]);
 
   const handleUpdateComment = (id: string, newComment: string) => {
     if (!article) return;
@@ -257,7 +268,11 @@ export default function App() {
 
   const handleExport = () => {
     if (!article) return;
-    const dataStr = JSON.stringify(article, null, 2);
+    const articleToExport = {
+      ...article,
+      studyDate: articleDate || article.studyDate || ""
+    };
+    const dataStr = JSON.stringify(articleToExport, null, 2);
     const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
     
     const exportFileDefaultName = `watchtower-study-${article.title.replace(/\s+/g, '-').toLowerCase()}.json`;
@@ -308,24 +323,30 @@ export default function App() {
           setActiveTab("library");
         } else if (parsed && parsed.title && Array.isArray(parsed.items)) {
           // It's a single article
-          setArticle({
+          const singleArticle = {
             ...parsed,
-            reviewQuestions: parsed.reviewQuestions || []
-          });
-          setCollapsedSuggestions(new Set(parsed.items.map(item => item.id)));
+            reviewQuestions: parsed.reviewQuestions || [],
+            studyDate: parsed.studyDate || ""
+          };
+          setArticle(singleArticle);
+          setArticleDate(parsed.studyDate || "");
+          const allIds = [
+            ...parsed.items.map((item: any) => item.id),
+            ...(parsed.reviewQuestions || []).map((q: any) => q.id)
+          ];
+          setCollapsedSuggestions(new Set(allIds));
+          setCollapsedUserComments(new Set(allIds));
           
           const allNoteIds: string[] = [];
-          parsed.items.forEach(item => {
-            item.additionalNotes?.forEach(note => {
+          parsed.items.forEach((item: any) => {
+            item.additionalNotes?.forEach((note: any) => {
               allNoteIds.push(note.id);
             });
           });
           setCollapsedNotes(new Set(allNoteIds));
           
           setError(null);
-          // Auto-save this single imported article into our local storage library as well if it has an activeArticleId or prompt for save.
-          // To be helpful, let's also save it to Library so they never lose it
-          saveArticleToStorage(parsed);
+          saveArticleToStorage(singleArticle);
           setActiveTab("study");
         } else {
           setError("Invalid study data or backup file.");
@@ -354,15 +375,18 @@ export default function App() {
       const existingIdx = articles.findIndex(a => a.title === parsedArticle.title);
       if (existingIdx > -1) {
         setActiveArticleId(articles[existingIdx].id);
+        const resolvedDate = articles[existingIdx].date || parsedArticle.studyDate || "";
+        setArticleDate(resolvedDate);
         return;
       }
 
       const newId = Math.random().toString(36).substring(2, 10);
+      const resolvedDate = parsedArticle.studyDate || articleDate || "";
       const record: ArticleRecord = {
         id: newId,
         userId: "local-user",
         title: parsedArticle.title || "Untitled Article",
-        date: articleDate || "",
+        date: resolvedDate,
         createdAt: Date.now(),
         articleData: JSON.stringify(parsedArticle),
         coverUrl: ""
@@ -372,6 +396,7 @@ export default function App() {
       localStorage.setItem('watchtower-articles', JSON.stringify(articles));
       window.dispatchEvent(new Event('articlesUpdated'));
       setActiveArticleId(newId);
+      setArticleDate(resolvedDate);
     } catch (e) {
       console.error("Failed to auto-save single imported article", e);
     }
@@ -498,6 +523,7 @@ export default function App() {
     setActiveArticleId(null);
     setArticle(null);
     setInputText("");
+    setArticleDate("");
     setError(null);
     setCollapsedSuggestions(new Set());
     setCollapsedNotes(new Set());
@@ -731,18 +757,18 @@ export default function App() {
     <div className="min-h-screen bg-background text-foreground font-sans selection:bg-primary/20 transition-colors duration-300 flex">
       {/* Sidebar Navigation */}
       <aside className="fixed left-0 top-0 bottom-0 w-16 md:w-20 bg-card border-r border-border flex flex-col items-center py-8 z-30">
-        <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-primary-foreground shadow-lg shadow-primary/20 mb-12">
+        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center text-white shadow-lg shadow-purple-500/25 mb-10">
           <BookOpen size={22} />
         </div>
         
-        <nav className="flex flex-col gap-4">
+        <nav className="flex flex-col gap-3.5">
           <button
             onClick={() => reset("library")}
             className={cn(
               "p-3 rounded-xl transition-all duration-200 group relative",
               activeTab === "library" || (!article && activeTab !== "import")
-                ? "bg-primary text-primary-foreground shadow-md shadow-primary/20" 
-                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-500/30" 
+                : "text-indigo-500 dark:text-indigo-400 hover:bg-indigo-500/10 hover:text-indigo-600 dark:hover:text-indigo-300"
             )}
             title="Dashboard"
           >
@@ -756,8 +782,8 @@ export default function App() {
             className={cn(
               "p-3 rounded-xl transition-all duration-200 group relative",
               activeTab === "import"
-                ? "bg-primary text-primary-foreground shadow-md shadow-primary/20" 
-                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                ? "bg-emerald-600 text-white shadow-md shadow-emerald-500/30" 
+                : "text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-600 dark:hover:text-emerald-300"
             )}
             title="Import New"
           >
@@ -768,10 +794,34 @@ export default function App() {
           </button>
 
           {[
-            { id: "study", icon: Layout, label: "Study" },
-            { id: "article", icon: FileText, label: "Article" },
-            { id: "scriptures", icon: BookOpen, label: "Scriptures" },
-            { id: "settings", icon: Settings, label: "Settings" }
+            { 
+              id: "study", 
+              icon: Layout, 
+              label: "Study",
+              activeClass: "bg-amber-600 text-white shadow-md shadow-amber-500/30",
+              inactiveClass: "text-amber-500 dark:text-amber-400 hover:bg-amber-500/10 hover:text-amber-600 dark:hover:text-amber-300"
+            },
+            { 
+              id: "article", 
+              icon: FileText, 
+              label: "Article",
+              activeClass: "bg-cyan-600 text-white shadow-md shadow-cyan-500/30",
+              inactiveClass: "text-cyan-500 dark:text-cyan-400 hover:bg-cyan-500/10 hover:text-cyan-600 dark:hover:text-cyan-300"
+            },
+            { 
+              id: "scriptures", 
+              icon: BookOpen, 
+              label: "Scriptures",
+              activeClass: "bg-rose-600 text-white shadow-md shadow-rose-500/30",
+              inactiveClass: "text-rose-500 dark:text-rose-400 hover:bg-rose-500/10 hover:text-rose-600 dark:hover:text-rose-300"
+            },
+            { 
+              id: "settings", 
+              icon: Settings, 
+              label: "Settings",
+              activeClass: "bg-purple-600 text-white shadow-md shadow-purple-500/30",
+              inactiveClass: "text-purple-500 dark:text-purple-400 hover:bg-purple-500/10 hover:text-purple-600 dark:hover:text-purple-300"
+            }
           ].map((nav) => (
             <button
               key={nav.id}
@@ -779,8 +829,8 @@ export default function App() {
               className={cn(
                 "p-3 rounded-xl transition-all duration-200 group relative",
                 activeTab === nav.id 
-                  ? "bg-primary text-primary-foreground shadow-md shadow-primary/20" 
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  ? nav.activeClass 
+                  : nav.inactiveClass
               )}
               title={nav.label}
             >
@@ -792,12 +842,12 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="mt-auto flex flex-col gap-4">
+        <div className="mt-auto flex flex-col gap-3.5">
           <Button 
             variant="ghost" 
             size="icon" 
             onClick={toggleDarkMode}
-            className="rounded-full hover:bg-muted"
+            className="rounded-xl text-amber-500 hover:text-amber-600 hover:bg-amber-500/10 dark:text-amber-400 dark:hover:bg-amber-500/20"
             title="Toggle Theme"
           >
             {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
@@ -805,7 +855,7 @@ export default function App() {
           <Button
             variant="ghost"
             size="icon"
-            className="rounded-full hover:bg-muted text-muted-foreground"
+            className="rounded-xl text-teal-500 hover:text-teal-600 hover:bg-teal-500/10 dark:text-teal-400 dark:hover:bg-teal-500/20"
             onClick={() => document.getElementById('import-data')?.click()}
             title="Import Saved .json Data"
           >
@@ -815,7 +865,7 @@ export default function App() {
             <Button
               variant="ghost"
               size="icon"
-              className="rounded-full hover:bg-muted"
+              className="rounded-xl text-blue-500 hover:text-blue-600 hover:bg-blue-500/10 dark:text-blue-400 dark:hover:bg-blue-500/20"
               onClick={handleExport}
               title="Export Study Data"
             >
@@ -875,15 +925,17 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95 }}
             >
-              <Library onSelectArticle={(imported, id) => {
+              <Library onSelectArticle={(imported, id, date) => {
                 setArticle(imported);
                 setActiveArticleId(id);
+                setArticleDate(date || imported.studyDate || "");
                 
                 const allIds = [
                   ...imported.items.map(item => item.id),
                   ...(imported.reviewQuestions || []).map(q => q.id)
                 ];
                 setCollapsedSuggestions(new Set(allIds));
+                setCollapsedUserComments(new Set(allIds));
                 
                 const allNoteIds: string[] = [];
                 imported.items.forEach(item => {
@@ -1026,9 +1078,16 @@ export default function App() {
             >
               <div className="text-center space-y-2">
                 <h2 className="text-3xl md:text-4xl font-serif italic text-primary">{article?.title}</h2>
-                <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm font-medium uppercase tracking-widest">
+                <div className="flex items-center justify-center gap-3 text-muted-foreground text-sm font-medium">
                   <Separator className="w-8 bg-border" />
-                  <span>Study Preparation</span>
+                  {articleDate ? (
+                    <div className="flex items-center gap-2 text-xs md:text-sm font-normal text-muted-foreground bg-muted/40 px-3 py-1 rounded-full border border-border">
+                      <Calendar size={14} className="text-primary" />
+                      <span>Study Date: <strong className="text-foreground font-medium">{formatDisplayDate(articleDate)}</strong></span>
+                    </div>
+                  ) : (
+                    <span className="uppercase tracking-widest text-xs">Study Preparation</span>
+                  )}
                   <Separator className="w-8 bg-border" />
                 </div>
               </div>

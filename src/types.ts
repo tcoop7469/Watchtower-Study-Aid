@@ -41,4 +41,5 @@ export interface WatchtowerArticle {
   items: StudyItem[];
   reviewQuestions: ReviewQuestion[];
   originalText: string;
+  studyDate?: string;
 }

@@ -15,7 +15,32 @@ export interface ArticleRecord {
   articleData: string;
 }
 
-export function Library({ onSelectArticle }: { onSelectArticle: (article: WatchtowerArticle, id: string) => void }) {
+export function formatDisplayDate(dateStr: string): string {
+  if (!dateStr) return "";
+  const parts = dateStr.split('-');
+  if (parts.length === 3) {
+    const [y, m, d] = parts.map(Number);
+    if (y && m && d) {
+      const dObj = new Date(y, m - 1, d);
+      return dObj.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+    }
+  }
+  return dateStr;
+}
+
+export function parseDateTimestamp(dateStr: string): number {
+  if (!dateStr) return 0;
+  const parts = dateStr.split('-');
+  if (parts.length === 3) {
+    const [y, m, d] = parts.map(Number);
+    if (y && m && d) {
+      return new Date(y, m - 1, d).getTime();
+    }
+  }
+  return new Date(dateStr).getTime() || 0;
+}
+
+export function Library({ onSelectArticle }: { onSelectArticle: (article: WatchtowerArticle, id: string, date?: string) => void }) {
   const [articles, setArticles] = useState<ArticleRecord[]>([]);
   const [loading, setLoading] = useState(true);
   
@@ -29,8 +54,8 @@ export function Library({ onSelectArticle }: { onSelectArticle: (article: Watcht
       if (stored) {
         const parsed = JSON.parse(stored) as ArticleRecord[];
         parsed.sort((a, b) => {
-          const dateA = a.date ? new Date(a.date).getTime() : 0;
-          const dateB = b.date ? new Date(b.date).getTime() : 0;
+          const dateA = parseDateTimestamp(a.date);
+          const dateB = parseDateTimestamp(b.date);
           return dateB - dateA;
         });
         setArticles(parsed);
@@ -95,6 +120,7 @@ export function Library({ onSelectArticle }: { onSelectArticle: (article: Watcht
         try {
           const parsed = JSON.parse(record.articleData);
           parsed.title = editTitle;
+          parsed.studyDate = editDate;
           return {
             ...record,
             title: editTitle,
@@ -120,7 +146,10 @@ export function Library({ onSelectArticle }: { onSelectArticle: (article: Watcht
     e.stopPropagation();
     try {
       const parsed = JSON.parse(record.articleData);
-      // Ensure we export it parsed as a nice WatchtowerArticle json representation
+      // Ensure we export it parsed as a nice WatchtowerArticle json representation with studyDate
+      if (!parsed.studyDate && record.date) {
+        parsed.studyDate = record.date;
+      }
       const dataStr = JSON.stringify(parsed, null, 2);
       const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
       
@@ -152,8 +181,9 @@ export function Library({ onSelectArticle }: { onSelectArticle: (article: Watcht
     }
   };
 
-  const upcomingArticles = articles.filter(a => !a.date || new Date(a.date) >= new Date(new Date().setHours(0,0,0,0)));
-  const previousArticles = articles.filter(a => a.date && new Date(a.date) < new Date(new Date().setHours(0,0,0,0)));
+  const todayStart = new Date(new Date().setHours(0, 0, 0, 0)).getTime();
+  const upcomingArticles = articles.filter(a => !a.date || parseDateTimestamp(a.date) >= todayStart);
+  const previousArticles = articles.filter(a => a.date && parseDateTimestamp(a.date) < todayStart);
 
   if (loading) {
     return <div className="p-8 text-center text-muted-foreground">Loading library...</div>;
@@ -167,7 +197,12 @@ export function Library({ onSelectArticle }: { onSelectArticle: (article: Watcht
           className="flex items-center justify-between p-4 rounded-lg border border-border bg-card hover:bg-muted/50 transition-colors cursor-pointer shadow-sm group" 
           onClick={() => {
             if (editingId !== record.id) {
-              onSelectArticle(JSON.parse(record.articleData), record.id);
+              try {
+                const parsed = JSON.parse(record.articleData);
+                onSelectArticle(parsed, record.id, record.date || parsed.studyDate);
+              } catch (e) {
+                console.error("Failed to parse article data", e);
+              }
             }
           }}
         >
@@ -204,7 +239,7 @@ export function Library({ onSelectArticle }: { onSelectArticle: (article: Watcht
                 {record.date ? (
                   <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                     <Calendar size={12} />
-                    Study Date: {new Date(record.date).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}
+                    Study Date: {formatDisplayDate(record.date)}
                   </div>
                 ) : (
                   <div className="flex items-center gap-1.5 text-xs text-muted-foreground italic">
