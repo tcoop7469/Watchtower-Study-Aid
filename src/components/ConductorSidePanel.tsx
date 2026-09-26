@@ -31,6 +31,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { generateConductorAnalysis, generateConductorAnalysisBatch } from '../services/geminiService';
 import { ensureValidConductorData } from '../utils/conductorEngine';
+import { processImageFile } from '../utils/imageUtils';
 import { cn } from '@/lib/utils';
 
 interface ConductorSidePanelProps {
@@ -216,10 +217,9 @@ export function ConductorSidePanel({
     }
   };
 
-  const handleImageUpload = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      const base64 = e.target?.result as string;
+  const handleImageUpload = async (file: File) => {
+    try {
+      const base64 = await processImageFile(file);
       if (!currentItem) return;
       
       const existingData = currentItem.conductorData || {
@@ -261,8 +261,9 @@ export function ConductorSidePanel({
       } finally {
         setIsAnalyzing(false);
       }
-    };
-    reader.readAsDataURL(file);
+    } catch (err) {
+      console.error('Error processing image in conductor panel:', err);
+    }
   };
 
   const handleAddCustomPoint = () => {

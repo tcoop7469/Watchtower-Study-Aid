@@ -55,6 +55,8 @@ import { processArticle, regenerateComment } from "./services/geminiService";
 import { WatchtowerArticle, StudyItem, SuggestedCommentOption, ConductorData, ConductorPointColor, ConductorPoint } from "./types";
 import { ConductorSidePanel, COLOR_CONFIG } from "./components/ConductorSidePanel";
 import { ensureArticleConductorData, splitParagraphIntoSentences } from "./utils/conductorEngine";
+import { ImageReferenceNote } from "./components/ImageReferenceNote";
+import { processImageFile } from "./utils/imageUtils";
 import { cn } from "@/lib/utils";
 import { Library, ArticleRecord, formatDisplayDate } from "./components/Library";
 
@@ -193,19 +195,6 @@ export default function App() {
       setIsLoading(false);
     }
   };
-
-  // Auto-heal conductor data for any active article so that ALL paragraphs work immediately
-  useEffect(() => {
-    if (!article || !article.items || article.items.length === 0) return;
-    const needsHealing = article.items.some(
-      item => !item.conductorData || !item.conductorData.extraPoints || item.conductorData.extraPoints.length === 0 ||
-      item.conductorData.extraPoints.some(pt => !pt.text || !item.paragraph.includes(pt.text) || (pt.text.length < 25 && item.paragraph.length > 50))
-    );
-    if (needsHealing) {
-      const healed = ensureArticleConductorData(article);
-      setArticle(healed);
-    }
-  }, [article]);
 
   // Save article when it changes
   useEffect(() => {
@@ -378,12 +367,12 @@ export default function App() {
       }
 
       if (item.additionalNotes && item.additionalNotes.length > 0) {
-        output += `* PERSONAL NOTES:\n`;
+        output += `* PERSONAL NOTES & IMAGE REFERENCES:\n`;
         item.additionalNotes.forEach((n, nIdx) => {
           if (n.type === 'text' && n.content) {
             output += `  - Note ${nIdx + 1}: ${n.content}\n`;
-          } else if (n.type === 'image') {
-            output += `  - Note ${nIdx + 1}: [Attached Image Note]\n`;
+          } else if (n.type === 'image' && n.content) {
+            output += `  - Image Reference ${nIdx + 1}: ${n.caption ? `[${n.caption}] ` : ''}${n.content.startsWith('http') ? n.content : '[Attached Picture]'}\n`;
           }
         });
         output += `\n`;
@@ -662,6 +651,24 @@ export default function App() {
     </div>\n`;
       }
 
+      // Additional Notes & Image References
+      if (item.additionalNotes && item.additionalNotes.length > 0) {
+        html += `    <div style="margin-top: 10px; padding: 10px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
+      <div style="font-weight: 700; font-size: 11px; color: #475569; margin-bottom: 6px; text-transform: uppercase;">Study Notes & Image References:</div>
+      ${item.additionalNotes.map(n => {
+        if (n.type === 'text' && n.content) {
+          return `<div style="font-size: 13px; margin-bottom: 4px;">• ${n.content}</div>`;
+        } else if (n.type === 'image' && n.content) {
+          return `<div style="margin-bottom: 8px;">
+            ${n.caption ? `<div style="font-size: 12px; font-weight: 600; margin-bottom: 2px;">${n.caption}</div>` : ''}
+            <img src="${n.content}" style="max-height: 240px; border-radius: 6px; max-width: 100%; display: block;" />
+          </div>`;
+        }
+        return '';
+      }).join('')}
+    </div>\n`;
+      }
+
       html += `  </div>\n`;
     });
 
@@ -738,6 +745,18 @@ export default function App() {
 
       if (item.userComment) {
         md += `**My Comment:** ${item.userComment}\n\n`;
+      }
+
+      if (item.additionalNotes && item.additionalNotes.length > 0) {
+        md += `**Study Notes & Image References:**\n\n`;
+        item.additionalNotes.forEach((n) => {
+          if (n.type === 'text' && n.content) {
+            md += `- ${n.content}\n`;
+          } else if (n.type === 'image' && n.content) {
+            md += `- ${n.caption ? `**${n.caption}**: ` : ''}![](${n.content})\n`;
+          }
+        });
+        md += `\n`;
       }
 
       md += `---\n\n`;
@@ -1093,44 +1112,84 @@ export default function App() {
     });
   };
 
-  const handleAddNote = (itemId: string, type: 'text' | 'image') => {
+  const syncArticleToStorage = (updatedArticle: WatchtowerArticle) => {
+    try {
+      const stored = localStorage.getItem('watchtower-articles');
+      if (stored) {
+        const resolvedDate = articleDate || updatedArticle.studyDate || "";
+        const articles: ArticleRecord[] = JSON.parse(stored);
+        const updated = articles.map(a => {
+          if (a.id === activeArticleId || (activeArticleId == null && a.title === updatedArticle.title)) {
+            return {
+              ...a,
+              articleData: JSON.stringify(updatedArticle),
+              date: resolvedDate || a.date || "",
+            };
+          }
+          return a;
+        });
+        localStorage.setItem('watchtower-articles', JSON.stringify(updated));
+        window.dispatchEvent(new Event('articlesUpdated'));
+      }
+    } catch (e) {
+      console.error("Failed to sync article to storage", e);
+    }
+  };
+
+  const handleAddNote = (itemId: string, type: 'text' | 'image', initialContent = '', initialCaption = '') => {
     if (!article) return;
     const newNote = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: 'note-' + Date.now() + '-' + Math.random().toString(36).substring(2, 9),
       type,
-      content: '',
+      content: initialContent,
+      caption: initialCaption,
     };
     
-    setArticle({
+    const updatedArticle: WatchtowerArticle = {
       ...article,
       items: article.items.map(item => 
         item.id === itemId 
           ? { ...item, additionalNotes: [...(item.additionalNotes || []), newNote] } 
           : item
       )
+    };
+    setArticle(updatedArticle);
+    syncArticleToStorage(updatedArticle);
+    setCollapsedNotes(prev => {
+      const next = new Set(prev);
+      next.delete(newNote.id);
+      return next;
     });
+    return newNote.id;
   };
 
-  const handleUpdateNote = (itemId: string, noteId: string, content: string) => {
+  const handleUpdateNote = (itemId: string, noteId: string, content: string, caption?: string) => {
     if (!article) return;
-    setArticle({
+    const updatedArticle: WatchtowerArticle = {
       ...article,
       items: article.items.map(item => 
         item.id === itemId 
           ? { 
               ...item, 
               additionalNotes: item.additionalNotes?.map(note => 
-                note.id === noteId ? { ...note, content } : note
+                note.id === noteId ? { ...note, content, ...(caption !== undefined ? { caption } : {}) } : note
               ) 
             } 
           : item
       )
+    };
+    setArticle(updatedArticle);
+    syncArticleToStorage(updatedArticle);
+    setCollapsedNotes(prev => {
+      const next = new Set(prev);
+      next.delete(noteId);
+      return next;
     });
   };
 
   const handleRemoveNote = (itemId: string, noteId: string) => {
     if (!article) return;
-    setArticle({
+    const updatedArticle: WatchtowerArticle = {
       ...article,
       items: article.items.map(item => 
         item.id === itemId 
@@ -1140,16 +1199,18 @@ export default function App() {
             } 
           : item
       )
-    });
+    };
+    setArticle(updatedArticle);
+    syncArticleToStorage(updatedArticle);
   };
 
-  const handleImageUpload = (itemId: string, noteId: string, file: File) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const content = e.target?.result as string;
+  const handleImageUpload = async (itemId: string, noteId: string, file: File) => {
+    try {
+      const content = await processImageFile(file);
       handleUpdateNote(itemId, noteId, content);
-    };
-    reader.readAsDataURL(file);
+    } catch (err) {
+      console.error("Failed to process image upload", err);
+    }
   };
 
   const reset = (tab: string = "import") => {
@@ -2138,35 +2199,6 @@ export default function App() {
                           </div>
                         </CardHeader>
                         <CardContent className="space-y-4">
-                          {item.conductorData?.pictureUrl && (
-                            <div className="relative rounded-xl overflow-hidden border border-border shadow-sm max-h-72 bg-muted/20">
-                              <img
-                                src={item.conductorData.pictureUrl}
-                                alt="Paragraph illustration"
-                                className="w-full h-full object-cover max-h-72"
-                              />
-                              <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur-md text-white px-2 py-0.5 rounded text-[10px] font-medium flex items-center gap-1">
-                                <ImageIcon size={10} /> Paragraph Illustration
-                              </div>
-                            </div>
-                          )}
-                          {item.conductorData?.hasPicture && !item.conductorData?.pictureUrl && (
-                            <div 
-                              onClick={() => {
-                                setConductorIndex(index);
-                                setIsConductorOpen(true);
-                              }}
-                              className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-800 dark:text-rose-300 cursor-pointer hover:bg-rose-500/15 transition-colors"
-                            >
-                              <div className="flex items-center gap-2 font-medium">
-                                <ImageIcon size={14} className="text-rose-600 dark:text-rose-400" />
-                                <span>Artwork Discussion: {item.conductorData.pictureDescription || "Illustration accompanies this paragraph"}</span>
-                              </div>
-                              <span className="text-[10px] font-bold uppercase tracking-wider bg-rose-500/20 px-2 py-0.5 rounded-full">
-                                View Questions →
-                              </span>
-                            </div>
-                          )}
                           <div className="p-4 rounded-xl bg-muted/50 border border-border text-muted-foreground leading-relaxed italic" style={{ fontSize: `${fontSizeParagraph}px` }}>
                             {renderParagraph(item, index)}
                           </div>
@@ -2387,66 +2419,24 @@ export default function App() {
                                     </Button>
                                   </div>
                                   
-                                  <AnimatePresence initial={false}>
-                                    {!collapsedNotes.has(note.id) && (
-                                      <motion.div
-                                        initial={{ height: 0, opacity: 0 }}
-                                        animate={{ height: "auto", opacity: 1 }}
-                                        exit={{ height: 0, opacity: 0 }}
-                                        className="overflow-hidden"
-                                      >
-                                        <div className="p-3">
-                                          {note.type === 'text' ? (
-                                            <Textarea
-                                              value={note.content}
-                                              onChange={(e) => handleUpdateNote(item.id, note.id, e.target.value)}
-                                              className="min-h-[80px] border-border bg-background/50 text-sm focus-visible:ring-primary"
-                                              placeholder="Add more study material or notes..."
-                                            />
-                                          ) : (
-                                            <div 
-                                              className={cn(
-                                                "relative aspect-video rounded-lg border-2 border-dashed border-border flex flex-col items-center justify-center gap-2 overflow-hidden bg-muted/20 transition-colors",
-                                                !note.content && "hover:border-primary/50 hover:bg-muted/40"
-                                              )}
-                                              onPaste={(e) => {
-                                                const file = e.clipboardData.files[0];
-                                                if (file && file.type.startsWith('image/')) {
-                                                  handleImageUpload(item.id, note.id, file);
-                                                }
-                                              }}
-                                            >
-                                              {note.content ? (
-                                                <img 
-                                                  src={note.content} 
-                                                  alt="Study material" 
-                                                  className="w-full h-full object-contain"
-                                                  referrerPolicy="no-referrer"
-                                                />
-                                              ) : (
-                                                <>
-                                                  <ImageIcon size={24} className="text-muted-foreground" />
-                                                  <div className="text-center">
-                                                    <p className="text-xs font-medium">Paste image here</p>
-                                                    <p className="text-[10px] text-muted-foreground">or click to upload</p>
-                                                  </div>
-                                                  <input 
-                                                    type="file" 
-                                                    accept="image/*"
-                                                    className="absolute inset-0 opacity-0 cursor-pointer"
-                                                    onChange={(e) => {
-                                                      const file = e.target.files?.[0];
-                                                      if (file) handleImageUpload(item.id, note.id, file);
-                                                    }}
-                                                  />
-                                                </>
-                                              )}
-                                            </div>
-                                          )}
-                                        </div>
-                                      </motion.div>
-                                    )}
-                                  </AnimatePresence>
+                                  {!collapsedNotes.has(note.id) && (
+                                    <div className="p-3 border-t border-border/40">
+                                      {note.type === 'text' ? (
+                                        <Textarea
+                                          value={note.content}
+                                          onChange={(e) => handleUpdateNote(item.id, note.id, e.target.value)}
+                                          className="min-h-[80px] border-border bg-background/50 text-sm focus-visible:ring-primary"
+                                          placeholder="Add more study material or notes..."
+                                        />
+                                      ) : (
+                                        <ImageReferenceNote
+                                          note={note}
+                                          onUpdate={(content, caption) => handleUpdateNote(item.id, note.id, content, caption)}
+                                          onRemove={() => handleRemoveNote(item.id, note.id)}
+                                        />
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
                               ))}
 
@@ -2454,20 +2444,28 @@ export default function App() {
                                 <div className="h-[1px] flex-1 bg-border" />
                                 <div className="flex items-center gap-1">
                                   <Button
+                                    type="button"
                                     variant="outline"
                                     size="sm"
-                                    className="h-8 rounded-full gap-1.5 text-[10px] font-bold uppercase tracking-wider border-dashed"
-                                    onClick={() => handleAddNote(item.id, 'text')}
+                                    className="h-8 rounded-full gap-1.5 text-[10px] font-bold uppercase tracking-wider border-dashed hover:border-primary/50 hover:bg-muted/50 cursor-pointer"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      handleAddNote(item.id, 'text');
+                                    }}
                                   >
                                     <Plus size={12} />
                                     <Type size={12} />
                                     Text
                                   </Button>
                                   <Button
+                                    type="button"
                                     variant="outline"
                                     size="sm"
-                                    className="h-8 rounded-full gap-1.5 text-[10px] font-bold uppercase tracking-wider border-dashed"
-                                    onClick={() => handleAddNote(item.id, 'image')}
+                                    className="h-8 rounded-full gap-1.5 text-[10px] font-bold uppercase tracking-wider border-dashed hover:border-primary/50 hover:bg-muted/50 cursor-pointer"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      handleAddNote(item.id, 'image');
+                                    }}
                                   >
                                     <Plus size={12} />
                                     <ImageIcon size={12} />

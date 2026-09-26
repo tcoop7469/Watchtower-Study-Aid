@@ -7,6 +7,7 @@ export interface AdditionalNote {
   id: string;
   type: 'text' | 'image';
   content: string;
+  caption?: string;
 }
 
 export interface SuggestedCommentOption {
