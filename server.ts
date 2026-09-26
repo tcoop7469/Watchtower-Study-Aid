@@ -65,6 +65,254 @@ CRITICAL:
 - Ensure the output is a valid JSON object matching the requested schema.
 `;
 
+const COLOR_CYCLE = ['emerald', 'purple', 'amber', 'rose', 'cyan'];
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function findExactSubstringInParagraph(paragraph: string, targetText: string): string | null {
+  if (!paragraph || !targetText) return null;
+  const cleanTarget = targetText.trim();
+  if (!cleanTarget) return null;
+  
+  // 1. Literal match
+  if (paragraph.includes(cleanTarget)) return cleanTarget;
+  
+  // 2. Case-insensitive exact match
+  const lowerPara = paragraph.toLowerCase();
+  const lowerTarget = cleanTarget.toLowerCase();
+  const lowerIdx = lowerPara.indexOf(lowerTarget);
+  if (lowerIdx !== -1) {
+    return paragraph.substring(lowerIdx, lowerIdx + cleanTarget.length);
+  }
+
+  // 3. Flexible quote, apostrophe, dash, whitespace regex
+  try {
+    const clean = cleanTarget.replace(/^[.,;:!?"'“”‘’—\s]+|[.,;:!?"'“”‘’—\s]+$/g, '');
+    if (clean.length > 2) {
+      let pattern = '';
+      for (let i = 0; i < clean.length; i++) {
+        const ch = clean[i];
+        if (/['\u2018\u2019\u201A\u201B]/.test(ch)) {
+          pattern += "['\u2018\u2019\u201A\u201B]";
+        } else if (/["\u201C\u201D\u201E\u201F]/.test(ch)) {
+          pattern += '["\u201C\u201D\u201E\u201F]';
+        } else if (/[-–—]/.test(ch)) {
+          pattern += '[-–—]';
+        } else if (/\s/.test(ch)) {
+          pattern += '\\s+';
+        } else {
+          pattern += escapeRegex(ch);
+        }
+      }
+      const match = new RegExp(pattern, 'i').exec(paragraph);
+      if (match && match[0]) {
+        return match[0];
+      }
+    }
+  } catch (e) {}
+
+  // 4. Try matching first 5 words
+  const words = cleanTarget.split(/\s+/).filter(w => w.length > 2);
+  if (words.length >= 3) {
+    const headWords = words.slice(0, Math.min(words.length, 5));
+    const headPattern = headWords.map(w => escapeRegex(w.replace(/['"“”‘’.,;:!?]/g, ''))).join('\\s+[^\\s]+\\s+|\\s+');
+    try {
+      const mHead = new RegExp(headPattern, 'i').exec(paragraph);
+      if (mHead && mHead[0]) {
+        return mHead[0];
+      }
+    } catch(e) {}
+  }
+
+  // 5. Word overlap match with sentences from paragraph
+  const sentences = splitIntoSentences(paragraph);
+  let bestSentence: string | null = null;
+  let maxOverlap = 0;
+  const targetWords = new Set(words.map(w => w.toLowerCase().replace(/[^a-z0-9]/g, '')));
+  
+  if (targetWords.size > 0) {
+    for (const sent of sentences) {
+      const sentWords = sent.split(/\s+/).map(w => w.toLowerCase().replace(/[^a-z0-9]/g, ''));
+      let overlap = 0;
+      for (const sw of sentWords) {
+        if (sw.length > 2 && targetWords.has(sw)) overlap++;
+      }
+      if (overlap > maxOverlap && overlap >= Math.min(2, targetWords.size)) {
+        maxOverlap = overlap;
+        bestSentence = sent;
+      }
+    }
+  }
+
+  return bestSentence;
+}
+
+function splitIntoSentences(text: string): string[] {
+  if (!text) return [];
+  const normalized = text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const matches = normalized.match(/[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g);
+  let sentences = (matches || [normalized]).map(s => s.trim()).filter(s => s.length > 10);
+  
+  if (sentences.length <= 1) {
+    const clauseMatches = normalized.split(/;|\s+—\s+|\s+-\s+|,\s+(?:and|but|for|yet|so|because|although)\s+/i);
+    const clauses = clauseMatches.map(c => c.trim()).filter(c => c.length > 15);
+    if (clauses.length > 1) {
+      sentences = clauses;
+    }
+  }
+  return sentences;
+}
+
+function generateConductorQuestionForText(pointText: string, index: number): string {
+  const lower = pointText.toLowerCase();
+  if (lower.includes('because') || lower.includes('reason') || lower.includes('why') || lower.includes('therefore')) {
+    return 'What key reason is highlighted here, and why is it so important for us?';
+  }
+  if (lower.includes('pray') || lower.includes('jehovah') || lower.includes('god')) {
+    return 'How does this deepen our personal relationship with Jehovah?';
+  }
+  if (lower.includes('example') || lower.includes('jesus') || lower.includes('apostle')) {
+    return 'What valuable lesson do we learn from this example?';
+  }
+  if (lower.includes('preach') || lower.includes('ministry') || lower.includes('field service')) {
+    return 'How can we apply this practical thought in our Christian ministry?';
+  }
+  if (lower.includes('trial') || lower.includes('endure') || lower.includes('faith')) {
+    return 'How can meditating on this point give us courage during difficult trials?';
+  }
+  const defaultQuestions = [
+    'What additional insight in this sentence helps to round out our answer?',
+    'How does this detail strengthen our understanding of the main question?',
+    'What practical lesson can we personally take away from this thought?',
+    'Why is this supporting point especially encouraging for us today?',
+  ];
+  return defaultQuestions[index % defaultQuestions.length];
+}
+
+function ensureValidConductorData(item: any, idx: number): any {
+  if (!item) return item;
+  const paragraph: string = item.paragraph || '';
+  const sentences = splitIntoSentences(paragraph);
+  const primaryAnswer: string = item.highlightedText || '';
+
+  let conductor = item.conductorData;
+  if (!conductor || typeof conductor !== 'object') {
+    conductor = {
+      extraPoints: [],
+      scriptureQuestions: [],
+      pictureQuestions: [],
+      teachingTips: [],
+      hasPicture: false,
+    };
+  }
+
+  // 1. Process or repair extraPoints
+  let extraPoints: any[] = Array.isArray(conductor.extraPoints) ? [...conductor.extraPoints] : [];
+
+  extraPoints = extraPoints
+    .map((pt: any, pIdx: number) => {
+      const match = findExactSubstringInParagraph(paragraph, pt.text);
+      const color = COLOR_CYCLE.includes(pt.color) ? pt.color : COLOR_CYCLE[pIdx % COLOR_CYCLE.length];
+      const resolvedText = match || pt.text;
+      return {
+        id: pt.id || `q${idx + 1}-pt${pIdx + 1}`,
+        text: resolvedText,
+        color,
+        label: pt.label || (pIdx === 0 ? 'Primary Insight' : pIdx === 1 ? 'Secondary Thought' : 'Supporting Gem'),
+        question: pt.question || generateConductorQuestionForText(resolvedText, pIdx),
+        scriptureRef: pt.scriptureRef || undefined,
+        type: pt.type || 'supporting',
+      };
+    })
+    .filter((pt: any) => pt.text && paragraph.includes(pt.text));
+
+  // If fewer than 2 valid points, synthesize from sentences in paragraph
+  if (extraPoints.length < 2 && sentences.length > 0) {
+    const existingTexts = new Set(extraPoints.map(p => p.text));
+    const nonAnswerSentences = sentences.filter(s => {
+      if (existingTexts.has(s)) return false;
+      if (primaryAnswer && (s.includes(primaryAnswer) || primaryAnswer.includes(s))) return false;
+      return true;
+    });
+
+    const candidates = nonAnswerSentences.length > 0 ? nonAnswerSentences : sentences;
+    let colorPointer = extraPoints.length;
+
+    for (const s of candidates) {
+      if (extraPoints.length >= 3) break;
+      if (existingTexts.has(s)) continue;
+      existingTexts.add(s);
+
+      const color = COLOR_CYCLE[colorPointer % COLOR_CYCLE.length];
+      colorPointer++;
+
+      const pNum = extraPoints.length + 1;
+      extraPoints.push({
+        id: `q${idx + 1}-pt${pNum}`,
+        text: s,
+        color,
+        label: pNum === 1 ? 'Primary Insight' : pNum === 2 ? 'Secondary Thought' : 'Supporting Gem',
+        question: generateConductorQuestionForText(s, extraPoints.length),
+        type: 'supporting',
+      });
+    }
+  }
+
+  // 2. Process or synthesize scriptureQuestions
+  let scriptureQuestions: any[] = Array.isArray(conductor.scriptureQuestions) ? [...conductor.scriptureQuestions] : [];
+  const allScriptures = [
+    ...(Array.isArray(item.readScriptures) ? item.readScriptures : []),
+    ...(Array.isArray(item.scriptures) ? item.scriptures : []),
+  ];
+
+  if (scriptureQuestions.length === 0 && allScriptures.length > 0) {
+    const uniqueRefs = Array.from(new Set(allScriptures));
+    uniqueRefs.slice(0, 3).forEach((ref) => {
+      const isRead = Array.isArray(item.readScriptures) && item.readScriptures.includes(ref);
+      scriptureQuestions.push({
+        scriptureRef: ref,
+        question: isRead 
+          ? `How does this 'Read' scripture directly support the main point in this paragraph?`
+          : `What insight does ${ref} add to our discussion?`,
+        purpose: 'Help the audience explain the scriptural basis.',
+      });
+    });
+  }
+
+  // 3. Process or synthesize pictureQuestions
+  let pictureQuestions: any[] = Array.isArray(conductor.pictureQuestions) ? [...conductor.pictureQuestions] : [];
+  const mentionsPicture = /picture|illustration|artwork|image|drawing|photo|scene|depicted/i.test(paragraph) || !!conductor.hasPicture;
+  
+  if (mentionsPicture && pictureQuestions.length === 0) {
+    pictureQuestions.push({
+      question: 'What emotions or details in this illustration help us appreciate the lesson?',
+      focus: 'Examine the facial expressions and setting depicted in the artwork.',
+    });
+  }
+
+  // 4. Teaching Tips
+  let teachingTips: string[] = Array.isArray(conductor.teachingTips) && conductor.teachingTips.length > 0
+    ? conductor.teachingTips
+    : [
+        'Allow 3 to 5 seconds of pause before calling on hands to allow thoughtful consideration.',
+        'If the primary answer is answered quickly, ask a follow-up question on the secondary points.',
+      ];
+
+  item.conductorData = {
+    ...conductor,
+    hasPicture: mentionsPicture || !!conductor.hasPicture,
+    pictureDescription: conductor.pictureDescription || (mentionsPicture ? 'Illustration accompanying paragraph' : ''),
+    extraPoints,
+    scriptureQuestions,
+    pictureQuestions,
+    teachingTips,
+  };
+
+  return item;
+}
+
 app.post('/api/gemini/process-article', async (req, res) => {
   try {
     const { text } = req.body;
@@ -286,6 +534,9 @@ app.post('/api/gemini/process-article', async (req, res) => {
     });
 
     const parsed = JSON.parse(response.text || '{}');
+    if (parsed.items && Array.isArray(parsed.items)) {
+      parsed.items = parsed.items.map((item: any, idx: number) => ensureValidConductorData(item, idx));
+    }
     res.json({ ...parsed, originalText: text });
   } catch (error: any) {
     console.error('Error in /api/gemini/process-article:', error);
@@ -477,10 +728,131 @@ CONDUCTOR INSTRUCTIONS:
     });
 
     const parsed = JSON.parse(response.text || '{}');
-    res.json(parsed);
+    const dummyItem = {
+      paragraph,
+      highlightedText: '',
+      scriptures,
+      readScriptures,
+      conductorData: parsed,
+    };
+    const validated = ensureValidConductorData(dummyItem, 0);
+    res.json(validated.conductorData);
   } catch (error: any) {
     console.error('Error in /api/gemini/conductor-analysis:', error);
     res.status(500).json({ error: error?.message || 'Failed to generate conductor analysis.' });
+  }
+});
+
+app.post('/api/gemini/conductor-analysis-batch', async (req, res) => {
+  try {
+    const { items } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      res.status(400).json({ error: 'Array of items is required.' });
+      return;
+    }
+
+    if (!process.env.GEMINI_API_KEY) {
+      res.status(500).json({
+        error: 'GEMINI_API_KEY is not configured on the server.',
+      });
+      return;
+    }
+
+    const results = await Promise.all(
+      items.map(async (it: any, idx: number) => {
+        try {
+          const textPrompt = `You are an expert Watchtower Study Conductor preparation specialist.
+Your goal is to help the study conductor get ALL the points out in this paragraph.
+
+Question: "${it.question || ''}"
+Paragraph:
+"""${it.paragraph}"""
+
+Scriptures: ${(it.scriptures || []).join(', ')}
+Read Scriptures: ${(it.readScriptures || []).join(', ')}
+
+Provide 2 to 4 distinct points with exact substrings from the paragraph, conductor follow-up questions, scripture questions, picture questions (if applicable), and conductor tips.`;
+
+          const response = await ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: [{ role: 'user', parts: [{ text: textPrompt }] }],
+            config: {
+              systemInstruction: SYSTEM_INSTRUCTION,
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  hasPicture: { type: Type.BOOLEAN },
+                  pictureDescription: { type: Type.STRING },
+                  extraPoints: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        id: { type: Type.STRING },
+                        text: { type: Type.STRING },
+                        color: { type: Type.STRING },
+                        type: { type: Type.STRING },
+                        label: { type: Type.STRING },
+                        question: { type: Type.STRING },
+                        scriptureRef: { type: Type.STRING },
+                      },
+                      required: ['id', 'text', 'color', 'label', 'question'],
+                    },
+                  },
+                  scriptureQuestions: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        scriptureRef: { type: Type.STRING },
+                        question: { type: Type.STRING },
+                        purpose: { type: Type.STRING },
+                      },
+                      required: ['scriptureRef', 'question'],
+                    },
+                  },
+                  pictureQuestions: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        question: { type: Type.STRING },
+                        focus: { type: Type.STRING },
+                      },
+                      required: ['question', 'focus'],
+                    },
+                  },
+                  teachingTips: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                  },
+                },
+                required: ['extraPoints', 'scriptureQuestions', 'pictureQuestions'],
+              },
+            },
+          });
+
+          const parsed = JSON.parse(response.text || '{}');
+          const dummy = {
+            ...it,
+            conductorData: parsed,
+          };
+          const validated = ensureValidConductorData(dummy, idx);
+          return { id: it.id, conductorData: validated.conductorData };
+        } catch (e) {
+          // If Gemini fails for this individual item, synthesize using local fallback
+          const dummy = { ...it, conductorData: it.conductorData || {} };
+          const fallback = ensureValidConductorData(dummy, idx);
+          return { id: it.id, conductorData: fallback.conductorData };
+        }
+      })
+    );
+
+    res.json({ results });
+  } catch (error: any) {
+    console.error('Error in /api/gemini/conductor-analysis-batch:', error);
+    res.status(500).json({ error: error?.message || 'Failed to process batch conductor analysis.' });
   }
 });
 

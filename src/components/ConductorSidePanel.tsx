@@ -29,7 +29,8 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { generateConductorAnalysis } from '../services/geminiService';
+import { generateConductorAnalysis, generateConductorAnalysisBatch } from '../services/geminiService';
+import { ensureValidConductorData } from '../utils/conductorEngine';
 import { cn } from '@/lib/utils';
 
 interface ConductorSidePanelProps {
@@ -39,6 +40,7 @@ interface ConductorSidePanelProps {
   activeItemIndex: number;
   onSelectItem: (index: number) => void;
   onUpdateItemConductorData: (itemId: string, data: ConductorData) => void;
+  onUpdateAllItemsConductorData?: (items: StudyItem[]) => void;
   onOpenScripture: (scripture: { reference: string; text: string }) => void;
   showHighlights: boolean;
   onToggleHighlights: (show: boolean) => void;
@@ -111,6 +113,7 @@ export function ConductorSidePanel({
   activeItemIndex,
   onSelectItem,
   onUpdateItemConductorData,
+  onUpdateAllItemsConductorData,
   onOpenScripture,
   showHighlights,
   onToggleHighlights,
@@ -118,6 +121,8 @@ export function ConductorSidePanel({
   onOpenExportModal
 }: ConductorSidePanelProps) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isBatchAnalyzing, setIsBatchAnalyzing] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
   const [copiedQuestionId, setCopiedQuestionId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ConductorTab>('all');
   const [pictureDescriptionInput, setPictureDescriptionInput] = useState('');
@@ -127,6 +132,14 @@ export function ConductorSidePanel({
   const [showAddCustom, setShowAddCustom] = useState(false);
 
   const currentItem = studyItems[activeItemIndex];
+
+  // Auto-heal current item if conductorData is missing or has 0 points
+  React.useEffect(() => {
+    if (currentItem && (!currentItem.conductorData || !currentItem.conductorData.extraPoints || currentItem.conductorData.extraPoints.length === 0)) {
+      const healedData = ensureValidConductorData(currentItem, activeItemIndex);
+      onUpdateItemConductorData(currentItem.id, healedData);
+    }
+  }, [currentItem, activeItemIndex]);
 
   // Sync picture toggle with current item
   React.useEffect(() => {
@@ -175,6 +188,31 @@ export function ConductorSidePanel({
       console.error('Failed to generate conductor analysis:', err);
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  const handleAnalyzeAllParagraphs = async () => {
+    if (isBatchAnalyzing || studyItems.length === 0) return;
+    setIsBatchAnalyzing(true);
+    setBatchProgress({ current: 0, total: studyItems.length });
+
+    try {
+      const batchSize = 3;
+      for (let i = 0; i < studyItems.length; i += batchSize) {
+        const slice = studyItems.slice(i, i + batchSize);
+        const batchResults = await generateConductorAnalysisBatch(slice);
+
+        batchResults.forEach(res => {
+          onUpdateItemConductorData(res.id, res.conductorData);
+        });
+
+        setBatchProgress({ current: Math.min(i + batchSize, studyItems.length), total: studyItems.length });
+      }
+    } catch (err) {
+      console.error('Failed to batch analyze all paragraphs:', err);
+    } finally {
+      setIsBatchAnalyzing(false);
+      setTimeout(() => setBatchProgress(null), 2500);
     }
   };
 
@@ -914,10 +952,28 @@ export function ConductorSidePanel({
                 <Button
                   variant="ghost"
                   size="sm"
+                  onClick={handleAnalyzeAllParagraphs}
+                  disabled={isBatchAnalyzing || isAnalyzing}
+                  className="h-7 text-xs px-2 gap-1 text-purple-600 dark:text-purple-400 hover:bg-purple-500/10"
+                  title="Analyze all paragraphs in the article with AI to generate complete Conductor questions"
+                >
+                  <Sparkles size={12} className={cn(isBatchAnalyzing && "animate-spin text-amber-500")} />
+                  <span>
+                    {batchProgress 
+                      ? `${batchProgress.current}/${batchProgress.total}` 
+                      : isBatchAnalyzing 
+                        ? "Analyzing..." 
+                        : "Analyze All"}
+                  </span>
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => handleAnalyzeParagraph(false)}
-                  disabled={isAnalyzing}
+                  disabled={isAnalyzing || isBatchAnalyzing}
                   className="h-7 text-xs px-2 gap-1 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
-                  title="Re-analyze or generate fresh conductor questions"
+                  title="Re-analyze or generate fresh conductor questions for this paragraph"
                 >
                   <RefreshCw size={12} className={cn(isAnalyzing && "animate-spin")} />
                   <span>{isAnalyzing ? "Analyzing..." : "Re-Analyze"}</span>
@@ -926,36 +982,82 @@ export function ConductorSidePanel({
             </div>
           </div>
 
-          {/* Paragraph Nav bar */}
-          <div className="px-4 py-2.5 bg-muted/40 border-b border-border flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-7 w-7 rounded-lg border-border"
-                disabled={activeItemIndex === 0}
-                onClick={() => onSelectItem(activeItemIndex - 1)}
-                title="Previous Paragraph"
-              >
-                <ChevronLeft size={14} />
-              </Button>
-              <span className="text-xs font-bold uppercase tracking-wider text-foreground">
-                Paragraph {activeItemIndex + 1} of {studyItems.length}
-              </span>
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-7 w-7 rounded-lg border-border"
-                disabled={activeItemIndex === studyItems.length - 1}
-                onClick={() => onSelectItem(activeItemIndex + 1)}
-                title="Next Paragraph"
-              >
-                <ChevronRight size={14} />
-              </Button>
+          {/* Paragraph Nav bar & Quick Selector */}
+          <div className="px-4 py-2 bg-muted/40 border-b border-border flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-7 w-7 rounded-lg border-border"
+                  disabled={activeItemIndex === 0}
+                  onClick={() => onSelectItem(activeItemIndex - 1)}
+                  title="Previous Paragraph"
+                >
+                  <ChevronLeft size={14} />
+                </Button>
+
+                {/* Dropdown select for instant jump to any paragraph */}
+                <select
+                  value={activeItemIndex}
+                  onChange={(e) => onSelectItem(Number(e.target.value))}
+                  className="h-7 px-2 text-xs font-bold uppercase tracking-wider bg-card border border-border rounded-lg text-foreground cursor-pointer focus:outline-none focus:ring-1 focus:ring-amber-500 max-w-[170px]"
+                  title="Select paragraph to open in Conductor Mode"
+                >
+                  {studyItems.map((item, idx) => {
+                    const count = item.conductorData?.extraPoints?.length || 0;
+                    return (
+                      <option key={item.id || idx} value={idx}>
+                        Para {idx + 1} ({count} pts){item.subheading ? ` - ${item.subheading.substring(0, 16)}` : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-7 w-7 rounded-lg border-border"
+                  disabled={activeItemIndex === studyItems.length - 1}
+                  onClick={() => onSelectItem(activeItemIndex + 1)}
+                  title="Next Paragraph"
+                >
+                  <ChevronRight size={14} />
+                </Button>
+              </div>
+
+              <div className="text-[11px] text-muted-foreground font-medium truncate max-w-[150px] text-right">
+                {currentItem.subheading || `Question ${activeItemIndex + 1}`}
+              </div>
             </div>
 
-            <div className="text-[11px] text-muted-foreground font-medium truncate max-w-[170px]">
-              {currentItem.subheading || `Question ${activeItemIndex + 1}`}
+            {/* Quick jump pill strip for all paragraphs */}
+            <div className="flex items-center gap-1 overflow-x-auto custom-scrollbar pb-1 pt-0.5">
+              {studyItems.map((item, idx) => {
+                const isActive = idx === activeItemIndex;
+                const ptCount = item.conductorData?.extraPoints?.length || 0;
+                return (
+                  <button
+                    key={item.id || idx}
+                    onClick={() => onSelectItem(idx)}
+                    className={cn(
+                      "px-2 py-0.5 rounded text-[10px] font-bold shrink-0 transition-all border flex items-center gap-1",
+                      isActive
+                        ? "bg-amber-500 text-white border-amber-600 shadow-xs scale-105"
+                        : ptCount > 0
+                          ? "bg-card text-foreground/80 hover:bg-muted border-border hover:border-amber-500/50"
+                          : "bg-muted/30 text-muted-foreground border-dashed border-border"
+                    )}
+                    title={`Paragraph ${idx + 1}: ${ptCount} points • "${item.question.substring(0, 40)}..."`}
+                  >
+                    <span>{idx + 1}</span>
+                    <span className={cn(
+                      "w-1.5 h-1.5 rounded-full",
+                      isActive ? "bg-white" : ptCount > 0 ? "bg-emerald-500" : "bg-muted-foreground/40"
+                    )} />
+                  </button>
+                );
+              })}
             </div>
           </div>
 

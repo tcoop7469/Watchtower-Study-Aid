@@ -54,6 +54,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { processArticle, regenerateComment } from "./services/geminiService";
 import { WatchtowerArticle, StudyItem, SuggestedCommentOption, ConductorData, ConductorPointColor } from "./types";
 import { ConductorSidePanel, COLOR_CONFIG } from "./components/ConductorSidePanel";
+import { ensureArticleConductorData } from "./utils/conductorEngine";
 import { cn } from "@/lib/utils";
 import { Library, ArticleRecord, formatDisplayDate } from "./components/Library";
 
@@ -130,14 +131,15 @@ export default function App() {
     const newId = Math.random().toString(36).substring(2, 10);
     try {
       const resolvedDate = dateOverride !== undefined ? dateOverride : (articleDate || parsedArticle.studyDate || "");
+      const healedArticle = ensureArticleConductorData(parsedArticle);
       const articleWithDate: WatchtowerArticle = {
-        ...parsedArticle,
+        ...healedArticle,
         studyDate: resolvedDate
       };
       const record: ArticleRecord = {
         id: newId,
         userId: "local-user",
-        title: parsedArticle.title || "Untitled Article",
+        title: articleWithDate.title || "Untitled Article",
         date: resolvedDate,
         createdAt: Date.now(),
         articleData: JSON.stringify(articleWithDate),
@@ -169,17 +171,18 @@ export default function App() {
     setError(null);
     try {
       const result = await processArticle(inputText);
-      result.studyDate = articleDate;
-      setArticle(result);
+      const healedResult = ensureArticleConductorData(result);
+      healedResult.studyDate = articleDate;
+      setArticle(healedResult);
       const allIds = [
-        ...result.items.map(item => item.id),
-        ...result.reviewQuestions.map(q => q.id)
+        ...healedResult.items.map(item => item.id),
+        ...healedResult.reviewQuestions.map(q => q.id)
       ];
       setCollapsedSuggestions(new Set(allIds));
       setCollapsedUserComments(new Set(allIds));
       setCollapsedNotes(new Set()); // New articles have no notes yet
       
-      const newId = await saveArticleToDB(result, articleDate);
+      const newId = await saveArticleToDB(healedResult, articleDate);
       if (newId) setActiveArticleId(newId);
 
       setActiveTab("study");
@@ -190,6 +193,18 @@ export default function App() {
       setIsLoading(false);
     }
   };
+
+  // Auto-heal conductor data for any active article so that ALL paragraphs work immediately
+  useEffect(() => {
+    if (!article || !article.items || article.items.length === 0) return;
+    const needsHealing = article.items.some(
+      item => !item.conductorData || !item.conductorData.extraPoints || item.conductorData.extraPoints.length === 0
+    );
+    if (needsHealing) {
+      const healed = ensureArticleConductorData(article);
+      setArticle(healed);
+    }
+  }, [article]);
 
   // Save article when it changes
   useEffect(() => {
@@ -937,17 +952,18 @@ export default function App() {
             reviewQuestions: parsed.reviewQuestions || [],
             studyDate: parsed.studyDate || ""
           };
-          setArticle(singleArticle);
+          const healedSingle = ensureArticleConductorData(singleArticle);
+          setArticle(healedSingle);
           setArticleDate(parsed.studyDate || "");
           const allIds = [
-            ...singleArticle.items.map((item: any) => item.id),
-            ...(singleArticle.reviewQuestions || []).map((q: any) => q.id)
+            ...healedSingle.items.map((item: any) => item.id),
+            ...(healedSingle.reviewQuestions || []).map((q: any) => q.id)
           ];
           setCollapsedSuggestions(new Set(allIds));
           setCollapsedUserComments(new Set(allIds));
           
           const allNoteIds: string[] = [];
-          singleArticle.items.forEach((item: any) => {
+          healedSingle.items.forEach((item: any) => {
             item.additionalNotes?.forEach((note: any) => {
               allNoteIds.push(note.id);
             });
@@ -955,7 +971,7 @@ export default function App() {
           setCollapsedNotes(new Set(allNoteIds));
           
           setError(null);
-          saveArticleToStorage(singleArticle);
+          saveArticleToStorage(healedSingle);
           setActiveTab("study");
         } else {
           setError("Invalid study data or backup file.");
@@ -1185,6 +1201,38 @@ export default function App() {
     }
   };
 
+  const handleUpdateAllItemsConductorData = (updatedItems: StudyItem[]) => {
+    if (!article) return;
+    const resolvedDate = articleDate || article.studyDate || "";
+    const updatedArticle: WatchtowerArticle = {
+      ...article,
+      studyDate: resolvedDate,
+      items: updatedItems,
+    };
+    setArticle(updatedArticle);
+
+    try {
+      const stored = localStorage.getItem('watchtower-articles');
+      if (stored) {
+        const articles: ArticleRecord[] = JSON.parse(stored);
+        const updated = articles.map(a => {
+          if (a.id === activeArticleId || (activeArticleId == null && a.title === article.title)) {
+            return {
+              ...a,
+              articleData: JSON.stringify(updatedArticle),
+              date: resolvedDate || a.date || "",
+            };
+          }
+          return a;
+        });
+        localStorage.setItem('watchtower-articles', JSON.stringify(updated));
+        window.dispatchEvent(new Event('articlesUpdated'));
+      }
+    } catch (e) {
+      console.error("Failed to sync conductor update to storage", e);
+    }
+  };
+
   const handleFocusPointInParagraph = (pointText: string, itemId: string) => {
     setFocusedPointText(pointText);
     const cardEl = document.getElementById(`item-card-${itemId}`);
@@ -1194,18 +1242,71 @@ export default function App() {
     setTimeout(() => setFocusedPointText(null), 3500);
   };
 
+  const findMatchInText = (text: string, search: string): { matchText: string; index: number } | null => {
+    if (!text || !search) return null;
+    const directIdx = text.indexOf(search);
+    if (directIdx !== -1) return { matchText: search, index: directIdx };
+
+    const lowerIdx = text.toLowerCase().indexOf(search.toLowerCase());
+    if (lowerIdx !== -1) {
+      return { matchText: text.substring(lowerIdx, lowerIdx + search.length), index: lowerIdx };
+    }
+
+    try {
+      const cleanSearch = search.trim().replace(/^[.,;:!?"'“”‘’—\s]+|[.,;:!?"'“”‘’—\s]+$/g, '');
+      if (cleanSearch.length > 2) {
+        let pattern = '';
+        for (let i = 0; i < cleanSearch.length; i++) {
+          const ch = cleanSearch[i];
+          if (/['\u2018\u2019\u201A\u201B]/.test(ch)) {
+            pattern += "['\u2018\u2019\u201A\u201B]";
+          } else if (/["\u201C\u201D\u201E\u201F]/.test(ch)) {
+            pattern += '["\u201C\u201D\u201E\u201F]';
+          } else if (/[-–—]/.test(ch)) {
+            pattern += '[-–—]';
+          } else if (/\s/.test(ch)) {
+            pattern += '\\s+';
+          } else {
+            pattern += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          }
+        }
+        const m = new RegExp(pattern, 'i').exec(text);
+        if (m && m[0]) return { matchText: m[0], index: m.index };
+      }
+    } catch (e) {}
+
+    // Fallback: match by first 5 words if long phrase
+    const words = search.trim().split(/\s+/).filter(w => w.length > 2);
+    if (words.length >= 3) {
+      const headWords = words.slice(0, Math.min(words.length, 5));
+      const headPattern = headWords.map(w => w.replace(/[.*+?^${}()|[\]\\'"`“”‘’]/g, '')).join('\\s+[^\\s]+\\s+|\\s+');
+      try {
+        const mHead = new RegExp(headPattern, 'i').exec(text);
+        if (mHead && mHead[0]) {
+          return { matchText: mHead[0], index: mHead.index };
+        }
+      } catch (e) {}
+    }
+
+    return null;
+  };
+
   const formatText = (content: React.ReactNode, search: string, formatter: (match: string, index: number) => React.ReactNode): React.ReactNode => {
     if (!search) return content;
     
     if (typeof content === 'string') {
-      const parts = content.split(search);
-      if (parts.length === 1) return content;
+      const match = findMatchInText(content, search);
+      if (!match) return content;
+
+      const before = content.substring(0, match.index);
+      const matched = match.matchText;
+      const after = content.substring(match.index + matched.length);
+
       const result: React.ReactNode[] = [];
-      for (let i = 0; i < parts.length; i++) {
-        if (parts[i]) result.push(parts[i]);
-        if (i < parts.length - 1) {
-          result.push(formatter(search, i));
-        }
+      if (before) result.push(before);
+      result.push(formatter(matched, 0));
+      if (after) {
+        result.push(formatText(after, search, formatter));
       }
       return result;
     }
@@ -1692,13 +1793,14 @@ export default function App() {
               exit={{ opacity: 0, scale: 0.95 }}
             >
               <Library onSelectArticle={(imported, id, date) => {
-                setArticle(imported);
+                const healed = ensureArticleConductorData(imported);
+                setArticle(healed);
                 setActiveArticleId(id);
-                setArticleDate(date || imported.studyDate || "");
+                setArticleDate(date || healed.studyDate || "");
                 
                 const allIds = [
-                  ...imported.items.map(item => item.id),
-                  ...(imported.reviewQuestions || []).map(q => q.id)
+                  ...healed.items.map(item => item.id),
+                  ...(healed.reviewQuestions || []).map(q => q.id)
                 ];
                 setCollapsedSuggestions(new Set(allIds));
                 setCollapsedUserComments(new Set(allIds));
@@ -2544,6 +2646,7 @@ export default function App() {
             if (cardEl) cardEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
           }}
           onUpdateItemConductorData={handleUpdateItemConductorData}
+          onUpdateAllItemsConductorData={handleUpdateAllItemsConductorData}
           onOpenScripture={(scripture) => setSelectedScripture(scripture)}
           showHighlights={showConductorHighlights}
           onToggleHighlights={setShowConductorHighlights}

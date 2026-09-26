@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Trash2, Image as ImageIcon, Calendar, Edit2, X, Check, Download } from 'lucide-react';
 import { WatchtowerArticle } from '../types';
+import { ensureArticleConductorData } from '../utils/conductorEngine';
 
 export interface ArticleRecord {
   id: string;
@@ -145,7 +146,8 @@ export function Library({ onSelectArticle }: { onSelectArticle: (article: Watcht
   const exportArticle = (e: React.MouseEvent, record: ArticleRecord) => {
     e.stopPropagation();
     try {
-      const parsed = JSON.parse(record.articleData);
+      const raw = JSON.parse(record.articleData);
+      const parsed = ensureArticleConductorData(raw);
       // Ensure we export it parsed as a nice WatchtowerArticle json representation with studyDate
       if (!parsed.studyDate && record.date) {
         parsed.studyDate = record.date;
@@ -198,7 +200,8 @@ export function Library({ onSelectArticle }: { onSelectArticle: (article: Watcht
           onClick={() => {
             if (editingId !== record.id) {
               try {
-                const parsed = JSON.parse(record.articleData);
+                const raw = JSON.parse(record.articleData);
+                const parsed = ensureArticleConductorData(raw);
                 onSelectArticle(parsed, record.id, record.date || parsed.studyDate);
               } catch (e) {
                 console.error("Failed to parse article data", e);

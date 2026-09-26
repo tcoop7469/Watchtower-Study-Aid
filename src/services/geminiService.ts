@@ -89,3 +89,34 @@ export async function generateConductorAnalysis(params: ConductorAnalysisParams)
   return data as ConductorData;
 }
 
+export async function generateConductorAnalysisBatch(items: Array<{
+  id: string;
+  question: string;
+  paragraph: string;
+  scriptures?: string[];
+  readScriptures?: string[];
+  conductorData?: any;
+}>): Promise<Array<{ id: string; conductorData: ConductorData }>> {
+  const response = await fetch("/api/gemini/conductor-analysis-batch", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ items }),
+  });
+
+  if (!response.ok) {
+    let errorMessage = "Failed to run batch conductor analysis";
+    try {
+      const errorData = await response.json();
+      if (errorData?.error) errorMessage = errorData.error;
+    } catch {
+      errorMessage = `Server error (${response.status})`;
+    }
+    throw new Error(errorMessage);
+  }
+
+  const data = await response.json();
+  return data.results || [];
+}
+
