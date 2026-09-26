@@ -14,6 +14,39 @@ export interface SuggestedCommentOption {
   scriptureRef?: string;
 }
 
+export type ConductorPointColor = 'emerald' | 'purple' | 'amber' | 'rose' | 'cyan';
+
+export interface ConductorPoint {
+  id: string;
+  text: string;
+  color: ConductorPointColor;
+  type?: 'supporting' | 'scripture_insight' | 'application' | 'illustration';
+  label: string;
+  question: string;
+  scriptureRef?: string;
+}
+
+export interface ScriptureQuestion {
+  scriptureRef: string;
+  question: string;
+  purpose?: string;
+}
+
+export interface PictureQuestion {
+  question: string;
+  focus?: string;
+}
+
+export interface ConductorData {
+  extraPoints: ConductorPoint[];
+  scriptureQuestions: ScriptureQuestion[];
+  pictureQuestions: PictureQuestion[];
+  hasPicture?: boolean;
+  pictureDescription?: string;
+  pictureUrl?: string;
+  teachingTips?: string[];
+}
+
 export interface StudyItem {
   id: string;
   subheading?: string;
@@ -27,6 +60,7 @@ export interface StudyItem {
   suggestedComments?: (string | SuggestedCommentOption)[];
   userComment: string;
   additionalNotes?: AdditionalNote[];
+  conductorData?: ConductorData;
 }
 
 export interface ReviewQuestion {
