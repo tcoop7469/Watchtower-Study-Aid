@@ -55,21 +55,9 @@ export function findBestSubstringMatch(paragraph: string, targetText: string): s
     }
   } catch (e) {}
 
-  // 4. Head words match (first 4-6 words)
-  const words = cleanTarget.split(/\s+/).filter(w => w.length > 2);
-  if (words.length >= 3) {
-    const headWords = words.slice(0, Math.min(words.length, 5));
-    const headPattern = headWords.map(w => escapeRegex(w.replace(/['"“”‘’.,;:!?]/g, ''))).join('\\s+[^\\s]+\\s+|\\s+');
-    try {
-      const mHead = new RegExp(headPattern, 'i').exec(paragraph);
-      if (mHead && mHead[0]) {
-        return mHead[0];
-      }
-    } catch (e) {}
-  }
-
-  // 5. Best matching sentence via word overlap in paragraph
+  // 4. Match full sentence via word overlap (NEVER return partial 4-5 words)
   const sentences = splitParagraphIntoSentences(paragraph);
+  const words = cleanTarget.split(/\s+/).filter(w => w.length > 2);
   let bestSentence: string | null = null;
   let maxOverlap = 0;
 
@@ -83,7 +71,7 @@ export function findBestSubstringMatch(paragraph: string, targetText: string): s
           overlap++;
         }
       }
-      if (overlap > maxOverlap && overlap >= Math.min(2, targetWordSet.size)) {
+      if (overlap > maxOverlap && overlap >= Math.min(2, Math.floor(targetWordSet.size * 0.4))) {
         maxOverlap = overlap;
         bestSentence = sent;
       }
@@ -175,50 +163,74 @@ export function ensureValidConductorData(item: StudyItem, idx: number): Conducto
   };
 
   // 1. Process and heal existing extraPoints
-  let extraPoints: ConductorPoint[] = Array.isArray(conductor.extraPoints) 
-    ? conductor.extraPoints.map((pt, pIdx) => {
-        const match = findBestSubstringMatch(paragraph, pt.text);
-        const color = COLOR_CYCLE.includes(pt.color as ConductorPointColor) 
-          ? (pt.color as ConductorPointColor) 
-          : COLOR_CYCLE[pIdx % COLOR_CYCLE.length];
-        
-        return {
-          id: pt.id || `q${idx + 1}-pt${pIdx + 1}`,
-          text: match || pt.text,
-          color,
-          label: pt.label || (pIdx === 0 ? 'Primary Insight' : pIdx === 1 ? 'Secondary Thought' : 'Supporting Gem'),
-          question: pt.question || generateConductorQuestionForText(match || pt.text, item.question, pIdx),
-          scriptureRef: pt.scriptureRef || undefined,
-          type: pt.type || 'supporting',
-        };
-      })
-    : [];
+  const usedTexts = new Set<string>();
+  const validPoints: ConductorPoint[] = [];
 
-  // Filter out points with empty text if we have sentences in paragraph to replace them
-  const validPoints = extraPoints.filter(pt => pt.text && paragraph.includes(pt.text));
+  const rawExtraPoints = Array.isArray(conductor.extraPoints) ? conductor.extraPoints : [];
 
-  // If fewer than 2 valid points, synthesize from sentences in paragraph
+  for (let pIdx = 0; pIdx < rawExtraPoints.length; pIdx++) {
+    const pt = rawExtraPoints[pIdx];
+    let ptText = (pt.text || '').trim();
+
+    // If point text is missing, find a match
+    if (!paragraph.includes(ptText) || ptText.length < 25) {
+      const match = findBestSubstringMatch(paragraph, ptText);
+      if (match) ptText = match;
+    }
+
+    // If point text is a truncated fragment of a sentence in the paragraph, heal to full sentence!
+    const containingSentence = sentences.find(s => s.includes(ptText) || (ptText.length > 15 && s.toLowerCase().includes(ptText.toLowerCase())));
+    if (containingSentence) {
+      ptText = containingSentence;
+    }
+
+    // Ensure it exists in paragraph
+    if (!paragraph.includes(ptText)) {
+      continue;
+    }
+
+    // Ensure uniqueness: never highlight the same sentence multiple times in the same paragraph
+    if (usedTexts.has(ptText)) {
+      continue;
+    }
+
+    usedTexts.add(ptText);
+
+    const color = COLOR_CYCLE.includes(pt.color as ConductorPointColor) 
+      ? (pt.color as ConductorPointColor) 
+      : COLOR_CYCLE[validPoints.length % COLOR_CYCLE.length];
+
+    const pNum = validPoints.length + 1;
+    validPoints.push({
+      id: pt.id || `q${idx + 1}-pt${pNum}`,
+      text: ptText,
+      color,
+      label: pt.label || (pNum === 1 ? 'Primary Insight' : pNum === 2 ? 'Secondary Thought' : 'Supporting Gem'),
+      question: pt.question || generateConductorQuestionForText(ptText, item.question, validPoints.length),
+      scriptureRef: pt.scriptureRef || undefined,
+      type: pt.type || 'supporting',
+    });
+  }
+
+  // If fewer than 2 valid points, synthesize from unused sentences in paragraph
   if (validPoints.length < 2 && sentences.length > 0) {
-    const existingTexts = new Set(validPoints.map(p => p.text));
-    
     // Non-answer sentences preferred
-    const nonAnswerSentences = sentences.filter(s => {
-      if (existingTexts.has(s)) return false;
+    const candidateSentences = sentences.filter(s => {
+      if (usedTexts.has(s)) return false;
       if (primaryAnswer && (s.includes(primaryAnswer) || primaryAnswer.includes(s))) return false;
       return true;
     });
 
-    const candidates = nonAnswerSentences.length > 0 ? nonAnswerSentences : sentences;
-    let colorPointer = validPoints.length;
+    const fallbackSentences = candidateSentences.length > 0 
+      ? candidateSentences 
+      : sentences.filter(s => !usedTexts.has(s));
 
-    for (const s of candidates) {
+    for (const s of fallbackSentences) {
       if (validPoints.length >= 3) break;
-      if (existingTexts.has(s)) continue;
-      existingTexts.add(s);
+      if (usedTexts.has(s)) continue;
+      usedTexts.add(s);
 
-      const color = COLOR_CYCLE[colorPointer % COLOR_CYCLE.length];
-      colorPointer++;
-
+      const color = COLOR_CYCLE[validPoints.length % COLOR_CYCLE.length];
       const pNum = validPoints.length + 1;
       const label = pNum === 1 ? 'Primary Insight' : pNum === 2 ? 'Secondary Thought' : 'Supporting Gem';
 
@@ -283,7 +295,7 @@ export function ensureValidConductorData(item: StudyItem, idx: number): Conducto
     ...conductor,
     hasPicture: mentionsPicture || !!conductor.hasPicture,
     pictureDescription: conductor.pictureDescription || (mentionsPicture ? 'Illustration accompanying paragraph' : ''),
-    extraPoints: validPoints.length > 0 ? validPoints : extraPoints,
+    extraPoints: validPoints,
     scriptureQuestions,
     pictureQuestions,
     teachingTips,

@@ -52,9 +52,9 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { processArticle, regenerateComment } from "./services/geminiService";
-import { WatchtowerArticle, StudyItem, SuggestedCommentOption, ConductorData, ConductorPointColor } from "./types";
+import { WatchtowerArticle, StudyItem, SuggestedCommentOption, ConductorData, ConductorPointColor, ConductorPoint } from "./types";
 import { ConductorSidePanel, COLOR_CONFIG } from "./components/ConductorSidePanel";
-import { ensureArticleConductorData } from "./utils/conductorEngine";
+import { ensureArticleConductorData, splitParagraphIntoSentences } from "./utils/conductorEngine";
 import { cn } from "@/lib/utils";
 import { Library, ArticleRecord, formatDisplayDate } from "./components/Library";
 
@@ -198,7 +198,8 @@ export default function App() {
   useEffect(() => {
     if (!article || !article.items || article.items.length === 0) return;
     const needsHealing = article.items.some(
-      item => !item.conductorData || !item.conductorData.extraPoints || item.conductorData.extraPoints.length === 0
+      item => !item.conductorData || !item.conductorData.extraPoints || item.conductorData.extraPoints.length === 0 ||
+      item.conductorData.extraPoints.some(pt => !pt.text || !item.paragraph.includes(pt.text) || (pt.text.length < 25 && item.paragraph.length > 50))
     );
     if (needsHealing) {
       const healed = ensureArticleConductorData(article);
@@ -1242,22 +1243,33 @@ export default function App() {
     setTimeout(() => setFocusedPointText(null), 3500);
   };
 
-  const findMatchInText = (text: string, search: string): { matchText: string; index: number } | null => {
-    if (!text || !search) return null;
-    const directIdx = text.indexOf(search);
-    if (directIdx !== -1) return { matchText: search, index: directIdx };
+  // Helper to find exact or fuzzy sentence range in paragraph text
+  const findTextRange = (paragraph: string, search: string): { start: number; end: number } | null => {
+    if (!paragraph || !search) return null;
+    const cleanSearch = search.trim();
+    if (!cleanSearch) return null;
 
-    const lowerIdx = text.toLowerCase().indexOf(search.toLowerCase());
-    if (lowerIdx !== -1) {
-      return { matchText: text.substring(lowerIdx, lowerIdx + search.length), index: lowerIdx };
+    // 1. Literal exact match
+    const exactIdx = paragraph.indexOf(cleanSearch);
+    if (exactIdx !== -1) {
+      return { start: exactIdx, end: exactIdx + cleanSearch.length };
     }
 
+    // 2. Case-insensitive exact match
+    const lowerPara = paragraph.toLowerCase();
+    const lowerSearch = cleanSearch.toLowerCase();
+    const lowerIdx = lowerPara.indexOf(lowerSearch);
+    if (lowerIdx !== -1) {
+      return { start: lowerIdx, end: lowerIdx + cleanSearch.length };
+    }
+
+    // 3. Flexible typography regex (quotes, dashes, whitespace)
     try {
-      const cleanSearch = search.trim().replace(/^[.,;:!?"'“”‘’—\s]+|[.,;:!?"'“”‘’—\s]+$/g, '');
-      if (cleanSearch.length > 2) {
+      const stripped = cleanSearch.replace(/^[.,;:!?"'“”‘’—\s]+|[.,;:!?"'“”‘’—\s]+$/g, '');
+      if (stripped.length > 2) {
         let pattern = '';
-        for (let i = 0; i < cleanSearch.length; i++) {
-          const ch = cleanSearch[i];
+        for (let i = 0; i < stripped.length; i++) {
+          const ch = stripped[i];
           if (/['\u2018\u2019\u201A\u201B]/.test(ch)) {
             pattern += "['\u2018\u2019\u201A\u201B]";
           } else if (/["\u201C\u201D\u201E\u201F]/.test(ch)) {
@@ -1270,154 +1282,242 @@ export default function App() {
             pattern += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
           }
         }
-        const m = new RegExp(pattern, 'i').exec(text);
-        if (m && m[0]) return { matchText: m[0], index: m.index };
+        const m = new RegExp(pattern, 'i').exec(paragraph);
+        if (m && m[0]) {
+          return { start: m.index, end: m.index + m[0].length };
+        }
       }
     } catch (e) {}
 
-    // Fallback: match by first 5 words if long phrase
-    const words = search.trim().split(/\s+/).filter(w => w.length > 2);
-    if (words.length >= 3) {
-      const headWords = words.slice(0, Math.min(words.length, 5));
-      const headPattern = headWords.map(w => w.replace(/[.*+?^${}()|[\]\\'"`“”‘’]/g, '')).join('\\s+[^\\s]+\\s+|\\s+');
-      try {
-        const mHead = new RegExp(headPattern, 'i').exec(text);
-        if (mHead && mHead[0]) {
-          return { matchText: mHead[0], index: mHead.index };
+    // 4. Match full sentence via word overlap (NEVER partial head words)
+    const sentences = splitParagraphIntoSentences(paragraph);
+    const targetWords = cleanSearch.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+    if (targetWords.length >= 2) {
+      const targetSet = new Set(targetWords);
+      let bestSent: string | null = null;
+      let maxOverlap = 0;
+      for (const sent of sentences) {
+        const sentWords = sent.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+        let overlap = 0;
+        for (const sw of sentWords) {
+          if (targetSet.has(sw)) overlap++;
         }
-      } catch (e) {}
+        if (overlap > maxOverlap && overlap >= Math.min(2, Math.floor(targetSet.size * 0.4))) {
+          maxOverlap = overlap;
+          bestSent = sent;
+        }
+      }
+      if (bestSent) {
+        const sIdx = paragraph.indexOf(bestSent);
+        if (sIdx !== -1) {
+          return { start: sIdx, end: sIdx + bestSent.length };
+        }
+      }
     }
 
     return null;
   };
 
-  const formatText = (content: React.ReactNode, search: string, formatter: (match: string, index: number) => React.ReactNode): React.ReactNode => {
-    if (!search) return content;
-    
-    if (typeof content === 'string') {
-      const match = findMatchInText(content, search);
-      if (!match) return content;
-
-      const before = content.substring(0, match.index);
-      const matched = match.matchText;
-      const after = content.substring(match.index + matched.length);
-
-      const result: React.ReactNode[] = [];
-      if (before) result.push(before);
-      result.push(formatter(matched, 0));
-      if (after) {
-        result.push(formatText(after, search, formatter));
-      }
-      return result;
-    }
-    
-    if (Array.isArray(content)) {
-      return content.map((child, idx) => (
-        <React.Fragment key={idx}>
-          {formatText(child, search, formatter)}
-        </React.Fragment>
-      ));
-    }
-    
-    if (content && typeof content === 'object' && 'props' in content) {
-      const element = content as React.ReactElement;
-      return React.cloneElement(element, {
-        ...element.props,
-        children: formatText(element.props.children, search, formatter)
-      });
-    }
-    
-    return content;
-  };
-
   const renderParagraph = (item: StudyItem, index: number) => {
-    let content: React.ReactNode = item.paragraph;
+    const text = item.paragraph || '';
+    if (!text) return null;
 
-    // 1. Conductor Mode Extra Points (Highlighted in Different Distinct Colors!)
-    if (showConductorHighlights && item.conductorData?.extraPoints && item.conductorData.extraPoints.length > 0) {
-      const sortedPoints = [...item.conductorData.extraPoints]
-        .filter(p => p.text && p.text.trim().length > 0)
-        .sort((a, b) => b.text.length - a.text.length);
+    interface HighlightRange {
+      start: number;
+      end: number;
+      type: 'conductor' | 'main';
+      conductorPoint?: ConductorPoint;
+    }
 
-      sortedPoints.forEach((point, pIdx) => {
-        const colorCfg = COLOR_CONFIG[point.color as ConductorPointColor] || COLOR_CONFIG.emerald;
-        content = formatText(content, point.text, (match, i) => (
-          <span 
-            key={`conductor-${point.id || pIdx}-${i}`} 
-            className={cn(
-              colorCfg.highlightClass,
-              "cursor-pointer shadow-xs inline transition-all duration-200",
-              focusedPointText === point.text && "ring-2 ring-amber-500 ring-offset-2 scale-[1.02] shadow-md"
-            )}
-            onClick={(e) => {
-              e.stopPropagation();
-              setConductorIndex(index);
-              setIsConductorOpen(true);
-              setFocusedPointText(point.text);
-            }}
-            title={`💡 Conductor Point (${point.label || colorCfg.name}): "${point.question}" — Click to open in Conductor Mode`}
-          >
-            {match}
-          </span>
-        ));
+    interface ScriptureRange {
+      start: number;
+      end: number;
+      reference: string;
+      isRead: boolean;
+    }
+
+    const highlightRanges: HighlightRange[] = [];
+    const scriptureRanges: ScriptureRange[] = [];
+
+    // 1. Conductor Mode Highlights: ONLY visible when in Conductor Mode (isConductorOpen === true) AND showConductorHighlights is true
+    if (isConductorOpen && showConductorHighlights && item.conductorData?.extraPoints && item.conductorData.extraPoints.length > 0) {
+      item.conductorData.extraPoints.forEach((point) => {
+        if (!point.text || !point.text.trim()) return;
+        const range = findTextRange(text, point.text);
+        if (range && range.start < range.end) {
+          // Avoid overlaps between conductor points
+          const overlaps = highlightRanges.some(
+            existing => Math.max(existing.start, range.start) < Math.min(existing.end, range.end)
+          );
+          if (!overlaps) {
+            highlightRanges.push({
+              start: range.start,
+              end: range.end,
+              type: 'conductor',
+              conductorPoint: point,
+            });
+          }
+        }
       });
+    } else {
+      // 2. Main Yellow Highlight: Only when NOT in conductor mode (or when conductor highlights are toggled off)
+      if (item.highlightedText && item.highlightedText.trim()) {
+        const mainRange = findTextRange(text, item.highlightedText);
+        if (mainRange && mainRange.start < mainRange.end) {
+          highlightRanges.push({
+            start: mainRange.start,
+            end: mainRange.end,
+            type: 'main',
+          });
+        }
+      }
     }
-    
-    // 2. Main Highlight (Yellow)
-    if (item.highlightedText) {
-      content = formatText(content, item.highlightedText, (match, i) => (
-        <span key={`main-${i}`} className="bg-yellow-200 dark:bg-yellow-900/50 text-foreground not-italic font-medium px-1 rounded">
-          {match}
-        </span>
-      ));
+
+    // 3. Scriptures (Read and Cited)
+    // Read Scriptures first (Blue highlight)
+    const readRefs = Array.isArray(item.readScriptures) ? item.readScriptures : [];
+    readRefs.forEach((s) => {
+      if (!s || !s.trim()) return;
+      const sRange = findTextRange(text, s);
+      if (sRange && sRange.start < sRange.end) {
+        scriptureRanges.push({
+          start: sRange.start,
+          end: sRange.end,
+          reference: s,
+          isRead: true,
+        });
+      }
+    });
+
+    // Cited Scriptures (Bold)
+    const allRefs = Array.isArray(item.scriptures) ? item.scriptures : [];
+    allRefs.forEach((s) => {
+      if (!s || !s.trim() || readRefs.includes(s)) return;
+      const sRange = findTextRange(text, s);
+      if (sRange && sRange.start < sRange.end) {
+        const overlaps = scriptureRanges.some(
+          existing => Math.max(existing.start, sRange.start) < Math.min(existing.end, sRange.end)
+        );
+        if (!overlaps) {
+          scriptureRanges.push({
+            start: sRange.start,
+            end: sRange.end,
+            reference: s,
+            isRead: false,
+          });
+        }
+      }
+    });
+
+    // Collect all unique boundary points across text
+    const boundarySet = new Set<number>([0, text.length]);
+    highlightRanges.forEach(r => {
+      boundarySet.add(r.start);
+      boundarySet.add(r.end);
+    });
+    scriptureRanges.forEach(r => {
+      boundarySet.add(r.start);
+      boundarySet.add(r.end);
+    });
+
+    const boundaries = Array.from(boundarySet).sort((a, b) => a - b);
+
+    // Build contiguous, non-overlapping segments
+    const elements: React.ReactNode[] = [];
+
+    for (let i = 0; i < boundaries.length - 1; i++) {
+      const segStart = boundaries[i];
+      const segEnd = boundaries[i + 1];
+      if (segStart >= segEnd) continue;
+
+      const segText = text.substring(segStart, segEnd);
+      if (!segText) continue;
+
+      const activeHighlight = highlightRanges.find(r => r.start <= segStart && r.end >= segEnd);
+      const activeScripture = scriptureRanges.find(r => r.start <= segStart && r.end >= segEnd);
+
+      let content: React.ReactNode = segText;
+
+      // Wrap in scripture interaction if applicable
+      if (activeScripture) {
+        const scRef = activeScripture.reference;
+        const handleScriptureClick = (e: React.MouseEvent) => {
+          e.stopPropagation();
+          let scripture = item.scriptureTexts.find(st => st.reference === scRef);
+          if (!scripture) {
+            scripture = item.scriptureTexts.find(st => st.reference.includes(scRef) || scRef.includes(st.reference));
+          }
+          if (scripture) setSelectedScripture(scripture);
+        };
+
+        if (activeScripture.isRead) {
+          content = (
+            <span
+              key={`sc-${segStart}`}
+              onClick={handleScriptureClick}
+              className="bg-blue-300 dark:bg-blue-800 text-foreground not-italic font-bold px-1 rounded shadow-xs cursor-pointer hover:bg-blue-400 dark:hover:bg-blue-700 transition-colors inline-block my-0.5"
+              title={`Read Scripture: ${scRef} (Click to view)`}
+            >
+              {segText}
+            </span>
+          );
+        } else {
+          content = (
+            <span
+              key={`sc-${segStart}`}
+              onClick={handleScriptureClick}
+              className="font-bold not-italic text-primary/90 cursor-pointer hover:underline decoration-primary/40 underline-offset-2 transition-all"
+              title={`Scripture Reference: ${scRef} (Click to view)`}
+            >
+              {segText}
+            </span>
+          );
+        }
+      }
+
+      // Wrap in highlight styling if applicable
+      if (activeHighlight) {
+        if (activeHighlight.type === 'conductor' && activeHighlight.conductorPoint) {
+          const pt = activeHighlight.conductorPoint;
+          const colorCfg = COLOR_CONFIG[pt.color as ConductorPointColor] || COLOR_CONFIG.emerald;
+          const isFocused = focusedPointText === pt.text;
+
+          elements.push(
+            <span
+              key={`hl-${segStart}`}
+              className={cn(
+                colorCfg.highlightClass,
+                "cursor-pointer shadow-xs inline transition-all duration-200",
+                isFocused && "ring-2 ring-amber-500 ring-offset-2 scale-[1.01] shadow-md font-semibold"
+              )}
+              onClick={(e) => {
+                e.stopPropagation();
+                setConductorIndex(index);
+                setIsConductorOpen(true);
+                setFocusedPointText(pt.text);
+              }}
+              title={`💡 Conductor Point (${pt.label || colorCfg.name}): "${pt.question}" — Click to view in Conductor Mode`}
+            >
+              {content}
+            </span>
+          );
+        } else if (activeHighlight.type === 'main') {
+          elements.push(
+            <span
+              key={`hl-${segStart}`}
+              className="bg-yellow-200 dark:bg-yellow-900/50 text-foreground not-italic font-medium px-1 rounded"
+              title="Primary Answer Basis"
+            >
+              {content}
+            </span>
+          );
+        }
+      } else {
+        elements.push(<React.Fragment key={`plain-${segStart}`}>{content}</React.Fragment>);
+      }
     }
-    
-    // 3. Read Scriptures (Blue highlight + Bold) - Sort by length descending to avoid partial matches
-    const sortedRead = [...item.readScriptures].sort((a, b) => b.length - a.length);
-    sortedRead.forEach((s, sIdx) => {
-      content = formatText(content, s, (match, i) => (
-        <span 
-          key={`read-${sIdx}-${i}`} 
-          className="bg-blue-300 dark:bg-blue-800 text-foreground not-italic font-bold px-1 rounded shadow-sm cursor-pointer hover:bg-blue-400 dark:hover:bg-blue-700 transition-colors"
-          onClick={() => {
-            // Try exact match first, then partial match
-            let scripture = item.scriptureTexts.find(st => st.reference === match);
-            if (!scripture) {
-              scripture = item.scriptureTexts.find(st => st.reference.includes(match) || match.includes(st.reference));
-            }
-            if (scripture) setSelectedScripture(scripture);
-          }}
-        >
-          {match}
-        </span>
-      ));
-    });
-    
-    // 4. Other Scriptures (Bold) - Sort by length descending
-    const sortedOther = item.scriptures
-      .filter(s => !item.readScriptures.includes(s))
-      .sort((a, b) => b.length - a.length);
-      
-    sortedOther.forEach((s, sIdx) => {
-      content = formatText(content, s, (match, i) => (
-        <span 
-          key={`scripture-${sIdx}-${i}`} 
-          className="font-bold not-italic text-primary/90 cursor-pointer hover:underline decoration-primary/30 underline-offset-2 transition-all"
-          onClick={() => {
-            // Try exact match first, then partial match
-            let scripture = item.scriptureTexts.find(st => st.reference === match);
-            if (!scripture) {
-              scripture = item.scriptureTexts.find(st => st.reference.includes(match) || match.includes(st.reference));
-            }
-            if (scripture) setSelectedScripture(scripture);
-          }}
-        >
-          {match}
-        </span>
-      ));
-    });
-    
-    return content;
+
+    return elements;
   };
 
   const renderSettingsContent = () => {
