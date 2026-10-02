@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
@@ -949,6 +950,90 @@ Provide 2 to 4 distinct points with exact substrings from the paragraph, conduct
     console.error('Error in /api/gemini/conductor-analysis-batch:', error);
     res.status(500).json({ error: error?.message || 'Failed to process batch conductor analysis.' });
   }
+});
+
+const DATA_DIR = path.resolve(__dirname, 'data');
+const ARTICLES_FILE = path.join(DATA_DIR, 'articles.json');
+
+function readArticlesFromDisk(): any[] {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (fs.existsSync(ARTICLES_FILE)) {
+      const raw = fs.readFileSync(ARTICLES_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    }
+  } catch (err) {
+    console.error('Failed to read articles from disk:', err);
+  }
+  return [];
+}
+
+function writeArticlesToDisk(articles: any[]) {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(ARTICLES_FILE, JSON.stringify(articles, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Failed to write articles to disk:', err);
+  }
+}
+
+app.get('/api/articles', (_req, res) => {
+  const articles = readArticlesFromDisk();
+  res.json({ articles });
+});
+
+app.post('/api/articles', (req, res) => {
+  const article = req.body;
+  if (!article || !article.id) {
+    res.status(400).json({ error: 'Article record with id is required.' });
+    return;
+  }
+  const articles = readArticlesFromDisk();
+  const idx = articles.findIndex((a: any) => a.id === article.id);
+  if (idx > -1) {
+    articles[idx] = article;
+  } else {
+    articles.unshift(article);
+  }
+  writeArticlesToDisk(articles);
+  res.json({ success: true, article });
+});
+
+app.post('/api/articles/sync', (req, res) => {
+  const { articles: clientArticles } = req.body;
+  if (!Array.isArray(clientArticles)) {
+    res.status(400).json({ error: 'articles array is required.' });
+    return;
+  }
+  const diskArticles = readArticlesFromDisk();
+  const mergedMap = new Map<string, any>();
+  for (const a of diskArticles) {
+    if (a && a.id) mergedMap.set(a.id, a);
+  }
+  for (const a of clientArticles) {
+    if (a && a.id) {
+      const existing = mergedMap.get(a.id);
+      if (!existing || (a.createdAt && (!existing.createdAt || a.createdAt >= existing.createdAt))) {
+        mergedMap.set(a.id, a);
+      }
+    }
+  }
+  const merged = Array.from(mergedMap.values());
+  writeArticlesToDisk(merged);
+  res.json({ success: true, articles: merged });
+});
+
+app.delete('/api/articles/:id', (req, res) => {
+  const { id } = req.params;
+  let articles = readArticlesFromDisk();
+  articles = articles.filter((a: any) => a.id !== id);
+  writeArticlesToDisk(articles);
+  res.json({ success: true });
 });
 
 // Explicit catch-all for /api/* to NEVER let API requests fall through to Vite SPA html handler

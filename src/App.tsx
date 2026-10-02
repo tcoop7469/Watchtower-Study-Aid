@@ -60,6 +60,7 @@ import { ImageReferenceNote } from "./components/ImageReferenceNote";
 import { processImageFile } from "./utils/imageUtils";
 import { cn } from "@/lib/utils";
 import { Library, ArticleRecord, formatDisplayDate } from "./components/Library";
+import { saveArticleRecord, deleteArticleRecord, fetchArticles, saveArticlesBatch, clearAllArticles } from "./services/articleStorage";
 
 export default function App() {
   const [inputText, setInputText] = useState("");
@@ -90,6 +91,7 @@ export default function App() {
   const [showConductorHighlights, setShowConductorHighlights] = useState(true);
   const [focusedPointText, setFocusedPointText] = useState<string | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [savedNotice, setSavedNotice] = useState(false);
 
   // Initialize theme and font sizes from system preference or local storage
   useEffect(() => {
@@ -130,8 +132,7 @@ export default function App() {
     });
   };
 
-  const saveArticleToDB = async (parsedArticle: WatchtowerArticle, dateOverride?: string) => {
-    const newId = Math.random().toString(36).substring(2, 10);
+  const saveArticleToDB = async (parsedArticle: WatchtowerArticle, dateOverride?: string, forceNewId = false) => {
     try {
       const resolvedDate = dateOverride !== undefined ? dateOverride : (articleDate || parsedArticle.studyDate || "");
       const healedArticle = ensureArticleConductorData(parsedArticle);
@@ -139,8 +140,9 @@ export default function App() {
         ...healedArticle,
         studyDate: resolvedDate
       };
+      const idToUse = (!forceNewId && activeArticleId) ? activeArticleId : ('art-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8));
       const record: ArticleRecord = {
-        id: newId,
+        id: idToUse,
         userId: "local-user",
         title: articleWithDate.title || "Untitled Article",
         date: resolvedDate,
@@ -149,19 +151,9 @@ export default function App() {
         coverUrl: ""
       };
       
-      const stored = localStorage.getItem('watchtower-articles');
-      let articles: ArticleRecord[] = [];
-      if (stored) {
-        try {
-          articles = JSON.parse(stored);
-        } catch(e) {}
-      }
-      
-      articles.push(record);
-      localStorage.setItem('watchtower-articles', JSON.stringify(articles));
-      window.dispatchEvent(new Event('articlesUpdated'));
-      
-      return newId;
+      await saveArticleRecord(record);
+      setActiveArticleId(idToUse);
+      return idToUse;
     } catch (err) {
       console.error("Failed to save article:", err);
       return null;
@@ -185,7 +177,7 @@ export default function App() {
       setCollapsedUserComments(new Set(allIds));
       setCollapsedNotes(new Set()); // New articles have no notes yet
       
-      const newId = await saveArticleToDB(healedResult, articleDate);
+      const newId = await saveArticleToDB(healedResult, articleDate, true);
       if (newId) setActiveArticleId(newId);
 
       setActiveTab("study");
@@ -197,40 +189,31 @@ export default function App() {
     }
   };
 
-  // Save article when it changes
+  // Save article when it changes (auto-save debounced)
   useEffect(() => {
     if (activeArticleId && article) {
       const updateDB = async () => {
         try {
-          const stored = localStorage.getItem('watchtower-articles');
-          if (!stored) return;
-          
-          const articles: ArticleRecord[] = JSON.parse(stored);
-          const updated = articles.map(a => {
-            if (a.id === activeArticleId) {
-              const resolvedDate = articleDate || article.studyDate || a.date || "";
-              const articleWithDate: WatchtowerArticle = {
-                ...article,
-                studyDate: resolvedDate
-              };
-              return {
-                ...a,
-                articleData: JSON.stringify(articleWithDate),
-                title: article.title || "Untitled Article",
-                date: resolvedDate
-              };
-            }
-            return a;
-          });
-          
-          localStorage.setItem('watchtower-articles', JSON.stringify(updated));
-          window.dispatchEvent(new Event('articlesUpdated'));
+          const resolvedDate = articleDate || article.studyDate || "";
+          const articleWithDate: WatchtowerArticle = {
+            ...article,
+            studyDate: resolvedDate
+          };
+          const record: ArticleRecord = {
+            id: activeArticleId,
+            userId: "local-user",
+            title: article.title || "Untitled Article",
+            date: resolvedDate,
+            createdAt: Date.now(),
+            articleData: JSON.stringify(articleWithDate),
+            coverUrl: ""
+          };
+          await saveArticleRecord(record);
         } catch (err) {
           console.error("Failed to auto-save", err);
         }
       };
-      // debounce slightly
-      const timer = setTimeout(updateDB, 1000);
+      const timer = setTimeout(updateDB, 800);
       return () => clearTimeout(timer);
     }
   }, [article, activeArticleId, articleDate]);
@@ -809,25 +792,18 @@ export default function App() {
       })),
     };
 
-    // Immediately sync to localStorage as well
-    try {
-      const stored = localStorage.getItem('watchtower-articles');
-      if (stored) {
-        const articles: ArticleRecord[] = JSON.parse(stored);
-        const updated = articles.map(a => {
-          if (a.id === activeArticleId || (activeArticleId == null && a.title === article.title)) {
-            return {
-              ...a,
-              articleData: JSON.stringify(articleToExport),
-              date: resolvedDate || a.date || "",
-            };
-          }
-          return a;
-        });
-        localStorage.setItem('watchtower-articles', JSON.stringify(updated));
-        window.dispatchEvent(new Event('articlesUpdated'));
-      }
-    } catch (e) {}
+    // Immediately sync to storage as well
+    const idToUse = activeArticleId || ('art-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8));
+    const record: ArticleRecord = {
+      id: idToUse,
+      userId: "local-user",
+      title: articleToExport.title || "Untitled Article",
+      date: resolvedDate || "",
+      createdAt: Date.now(),
+      articleData: JSON.stringify(articleToExport),
+      coverUrl: ""
+    };
+    saveArticleRecord(record).catch(console.error);
 
     const dataStr = JSON.stringify(articleToExport, null, 2);
     const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
@@ -921,39 +897,24 @@ export default function App() {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const content = e.target?.result as string;
         const parsed = JSON.parse(content);
         
         if (Array.isArray(parsed)) {
-          // It's a library backup! Let's import all these into the local storage
-          const stored = localStorage.getItem('watchtower-articles');
-          let existing: ArticleRecord[] = [];
-          if (stored) {
-            try {
-              existing = JSON.parse(stored);
-            } catch (e) {}
+          // It's a library backup! Let's import all these into storage
+          const validRecords: ArticleRecord[] = parsed.filter((importedItem: any) => 
+            importedItem && importedItem.id && importedItem.title && importedItem.articleData
+          );
+          if (validRecords.length > 0) {
+            await saveArticlesBatch(validRecords);
+            setError(null);
+            alert(`Successfully imported backup: ${validRecords.length} articles added/updated in your Dashboard.`);
+            setActiveTab("library");
+          } else {
+            setError("No valid article records found in backup file.");
           }
-          
-          // Merge avoiding identical IDs, update or append
-          const merged = [...existing];
-          parsed.forEach((importedItem: any) => {
-            if (importedItem.id && importedItem.title && importedItem.articleData) {
-              const idx = merged.findIndex(item => item.id === importedItem.id);
-              if (idx > -1) {
-                merged[idx] = importedItem; // Overwrite
-              } else {
-                merged.push(importedItem); // Append
-              }
-            }
-          });
-          
-          localStorage.setItem('watchtower-articles', JSON.stringify(merged));
-          window.dispatchEvent(new Event('articlesUpdated'));
-          setError(null);
-          alert(`Successfully imported backup: ${parsed.length} articles added/updated in your Library.`);
-          setActiveTab("library");
         } else if (parsed && parsed.title && Array.isArray(parsed.items)) {
           // It's a single article (make sure conductorData is mapped cleanly)
           const singleArticle: WatchtowerArticle = {
@@ -992,7 +953,7 @@ export default function App() {
           setCollapsedNotes(new Set(allNoteIds));
           
           setError(null);
-          saveArticleToStorage(healedSingle);
+          await saveArticleToStorage(healedSingle);
           setActiveTab("study");
         } else {
           setError("Invalid study data or backup file.");
@@ -1007,36 +968,11 @@ export default function App() {
   };
 
   const saveArticleToStorage = async (parsedArticle: WatchtowerArticle) => {
-    // Determine if this article is already in library, otherwise create new record
     try {
-      const stored = localStorage.getItem('watchtower-articles');
-      let articles: ArticleRecord[] = [];
-      if (stored) {
-        try {
-          articles = JSON.parse(stored);
-        } catch(e) {}
-      }
-
-      // Check if title already exists to avoid duplication - update existing record with imported conductor items
-      const existingIdx = articles.findIndex(a => a.title === parsedArticle.title);
-      if (existingIdx > -1) {
-        articles[existingIdx] = {
-          ...articles[existingIdx],
-          articleData: JSON.stringify(parsedArticle),
-          date: parsedArticle.studyDate || articles[existingIdx].date || "",
-        };
-        localStorage.setItem('watchtower-articles', JSON.stringify(articles));
-        window.dispatchEvent(new Event('articlesUpdated'));
-        setActiveArticleId(articles[existingIdx].id);
-        const resolvedDate = articles[existingIdx].date || parsedArticle.studyDate || "";
-        setArticleDate(resolvedDate);
-        return;
-      }
-
-      const newId = Math.random().toString(36).substring(2, 10);
       const resolvedDate = parsedArticle.studyDate || articleDate || "";
+      const idToUse = activeArticleId || ('art-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8));
       const record: ArticleRecord = {
-        id: newId,
+        id: idToUse,
         userId: "local-user",
         title: parsedArticle.title || "Untitled Article",
         date: resolvedDate,
@@ -1045,10 +981,8 @@ export default function App() {
         coverUrl: ""
       };
       
-      articles.push(record);
-      localStorage.setItem('watchtower-articles', JSON.stringify(articles));
-      window.dispatchEvent(new Event('articlesUpdated'));
-      setActiveArticleId(newId);
+      await saveArticleRecord(record);
+      setActiveArticleId(idToUse);
       setArticleDate(resolvedDate);
     } catch (e) {
       console.error("Failed to auto-save single imported article", e);
@@ -1113,25 +1047,23 @@ export default function App() {
     });
   };
 
-  const syncArticleToStorage = (updatedArticle: WatchtowerArticle) => {
+  const syncArticleToStorage = async (updatedArticle: WatchtowerArticle) => {
     try {
-      const stored = localStorage.getItem('watchtower-articles');
-      if (stored) {
-        const resolvedDate = articleDate || updatedArticle.studyDate || "";
-        const articles: ArticleRecord[] = JSON.parse(stored);
-        const updated = articles.map(a => {
-          if (a.id === activeArticleId || (activeArticleId == null && a.title === updatedArticle.title)) {
-            return {
-              ...a,
-              articleData: JSON.stringify(updatedArticle),
-              date: resolvedDate || a.date || "",
-            };
-          }
-          return a;
-        });
-        localStorage.setItem('watchtower-articles', JSON.stringify(updated));
-        window.dispatchEvent(new Event('articlesUpdated'));
+      const resolvedDate = articleDate || updatedArticle.studyDate || "";
+      const idToUse = activeArticleId || Math.random().toString(36).substring(2, 10);
+      if (!activeArticleId) {
+        setActiveArticleId(idToUse);
       }
+      const record: ArticleRecord = {
+        id: idToUse,
+        userId: "local-user",
+        title: updatedArticle.title || "Untitled Article",
+        date: resolvedDate,
+        createdAt: Date.now(),
+        articleData: JSON.stringify(updatedArticle),
+        coverUrl: ""
+      };
+      await saveArticleRecord(record);
     } catch (e) {
       console.error("Failed to sync article to storage", e);
     }
@@ -1241,27 +1173,19 @@ export default function App() {
     };
     setArticle(updatedArticle);
 
-    // Immediately persist to localStorage so Library and exports are 100% up to date
-    try {
-      const stored = localStorage.getItem('watchtower-articles');
-      if (stored) {
-        const articles: ArticleRecord[] = JSON.parse(stored);
-        const updated = articles.map(a => {
-          if (a.id === activeArticleId || (activeArticleId == null && a.title === article.title)) {
-            return {
-              ...a,
-              articleData: JSON.stringify(updatedArticle),
-              date: resolvedDate || a.date || "",
-            };
-          }
-          return a;
-        });
-        localStorage.setItem('watchtower-articles', JSON.stringify(updated));
-        window.dispatchEvent(new Event('articlesUpdated'));
-      }
-    } catch (e) {
-      console.error("Failed to sync conductor update to storage", e);
-    }
+    // Immediately persist so Dashboard and exports are 100% up to date
+    const idToUse = activeArticleId || ('art-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8));
+    if (!activeArticleId) setActiveArticleId(idToUse);
+    const record: ArticleRecord = {
+      id: idToUse,
+      userId: "local-user",
+      title: updatedArticle.title || "Untitled Article",
+      date: resolvedDate,
+      createdAt: Date.now(),
+      articleData: JSON.stringify(updatedArticle),
+      coverUrl: ""
+    };
+    saveArticleRecord(record).catch(console.error);
   };
 
   const handleUpdateAllItemsConductorData = (updatedItems: StudyItem[]) => {
@@ -1274,26 +1198,18 @@ export default function App() {
     };
     setArticle(updatedArticle);
 
-    try {
-      const stored = localStorage.getItem('watchtower-articles');
-      if (stored) {
-        const articles: ArticleRecord[] = JSON.parse(stored);
-        const updated = articles.map(a => {
-          if (a.id === activeArticleId || (activeArticleId == null && a.title === article.title)) {
-            return {
-              ...a,
-              articleData: JSON.stringify(updatedArticle),
-              date: resolvedDate || a.date || "",
-            };
-          }
-          return a;
-        });
-        localStorage.setItem('watchtower-articles', JSON.stringify(updated));
-        window.dispatchEvent(new Event('articlesUpdated'));
-      }
-    } catch (e) {
-      console.error("Failed to sync conductor update to storage", e);
-    }
+    const idToUse = activeArticleId || ('art-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8));
+    if (!activeArticleId) setActiveArticleId(idToUse);
+    const record: ArticleRecord = {
+      id: idToUse,
+      userId: "local-user",
+      title: updatedArticle.title || "Untitled Article",
+      date: resolvedDate,
+      createdAt: Date.now(),
+      articleData: JSON.stringify(updatedArticle),
+      coverUrl: ""
+    };
+    saveArticleRecord(record).catch(console.error);
   };
 
   const handleFocusPointInParagraph = (pointText: string, itemId: string) => {
@@ -1583,10 +1499,9 @@ export default function App() {
   };
 
   const renderSettingsContent = () => {
-    const handleClearLibrary = () => {
+    const handleClearLibrary = async () => {
       if (window.confirm("Are you sure you want to clear your local Library? This will permanently delete all saved study articles.")) {
-        localStorage.removeItem('watchtower-articles');
-        window.dispatchEvent(new Event('articlesUpdated'));
+        await clearAllArticles();
         alert("Library cleared successfully.");
       }
     };
@@ -1743,10 +1658,10 @@ export default function App() {
         
         <nav className="flex flex-col gap-3.5">
           <button
-            onClick={() => reset("library")}
+            onClick={() => setActiveTab("library")}
             className={cn(
               "p-3 rounded-xl transition-all duration-200 group relative",
-              activeTab === "library" || (!article && activeTab !== "import")
+              activeTab === "library"
                 ? "bg-indigo-600 text-white shadow-md shadow-indigo-500/30" 
                 : "text-indigo-500 dark:text-indigo-400 hover:bg-indigo-500/10 hover:text-indigo-600 dark:hover:text-indigo-300"
             )}
@@ -1914,14 +1829,21 @@ export default function App() {
                     ) : null}
                   </Button>
 
-                  {!activeArticleId && (
-                    <Button variant="default" size="sm" onClick={async () => {
-                      const newId = await saveArticleToDB(article);
+                  <Button 
+                    variant={activeArticleId ? "outline" : "default"} 
+                    size="sm" 
+                    onClick={async () => {
+                      const newId = await saveArticleToDB(article, articleDate);
                       if (newId) setActiveArticleId(newId);
-                    }} className="hidden md:flex gap-2">
-                      <Save size={14} /> Save to Library
-                    </Button>
-                  )}
+                      setSavedNotice(true);
+                      setTimeout(() => setSavedNotice(false), 2000);
+                    }} 
+                    className="hidden md:flex gap-2 items-center border-border"
+                    title="Article is automatically saved to your Dashboard, click to force immediate save"
+                  >
+                    <Check size={14} className="text-emerald-500" />
+                    <span>{savedNotice ? "Saved!" : "Saved in Dashboard"}</span>
+                  </Button>
                   <Button variant="outline" size="sm" onClick={copyAllComments} className="hidden sm:flex gap-2 border-border hover:bg-muted">
                     {copiedId === "all" ? <Check size={14} /> : <Copy size={14} />}
                     {copiedId === "all" ? "Copied All" : "Copy All"}
@@ -1947,36 +1869,58 @@ export default function App() {
 
         <main className={cn("max-w-4xl mx-auto w-full p-6 pb-24 transition-all duration-300", isConductorOpen && "xl:mr-[500px]")}>
         <AnimatePresence mode="wait">
-          {!article && !isLoading && activeTab === "library" ? (
+          {activeTab === "library" && !isLoading ? (
             <motion.div
               key="library-view"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95 }}
             >
-              <Library onSelectArticle={(imported, id, date) => {
-                const healed = ensureArticleConductorData(imported);
-                setArticle(healed);
-                setActiveArticleId(id);
-                setArticleDate(date || healed.studyDate || "");
-                
-                const allIds = [
-                  ...healed.items.map(item => item.id),
-                  ...(healed.reviewQuestions || []).map(q => q.id)
-                ];
-                setCollapsedSuggestions(new Set(allIds));
-                setCollapsedUserComments(new Set(allIds));
-                
-                const allNoteIds: string[] = [];
-                imported.items.forEach(item => {
-                  item.additionalNotes?.forEach(note => {
-                    allNoteIds.push(note.id);
+              {article && (
+                <div className="mb-6 p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shrink-0">
+                      <BookOpen size={20} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Currently Open in Study</div>
+                      <div className="font-semibold text-foreground text-sm truncate">{article.title}</div>
+                    </div>
+                  </div>
+                  <Button size="sm" onClick={() => setActiveTab("study")} className="gap-1.5 shrink-0 bg-indigo-600 hover:bg-indigo-700 text-white">
+                    <Layout size={14} /> Resume Study
+                  </Button>
+                </div>
+              )}
+              <Library 
+                activeArticleId={activeArticleId}
+                onImportNew={() => {
+                  reset("import");
+                }}
+                onSelectArticle={(imported, id, date) => {
+                  const healed = ensureArticleConductorData(imported);
+                  setArticle(healed);
+                  setActiveArticleId(id);
+                  setArticleDate(date || healed.studyDate || "");
+                  
+                  const allIds = [
+                    ...healed.items.map(item => item.id),
+                    ...(healed.reviewQuestions || []).map(q => q.id)
+                  ];
+                  setCollapsedSuggestions(new Set(allIds));
+                  setCollapsedUserComments(new Set(allIds));
+                  
+                  const allNoteIds: string[] = [];
+                  imported.items.forEach(item => {
+                    item.additionalNotes?.forEach(note => {
+                      allNoteIds.push(note.id);
+                    });
                   });
-                });
-                setCollapsedNotes(new Set(allNoteIds));
-                
-                setActiveTab("study");
-              }} />
+                  setCollapsedNotes(new Set(allNoteIds));
+                  
+                  setActiveTab("study");
+                }} 
+              />
             </motion.div>
           ) : !article && !isLoading && activeTab === "import" ? (
             <motion.div
