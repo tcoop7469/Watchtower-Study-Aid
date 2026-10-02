@@ -15,7 +15,8 @@ const portIndex = args.indexOf('--port');
 const cliPort = portIndex !== -1 && args[portIndex + 1] ? parseInt(args[portIndex + 1], 10) : undefined;
 const port = cliPort || (process.env.PORT ? parseInt(process.env.PORT, 10) : 3000);
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -25,6 +26,53 @@ const ai = new GoogleGenAI({
     },
   },
 });
+
+const CANDIDATE_MODELS = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+
+async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxRetries = 2, baseDelayMs = 1500): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      attempt++;
+      const errStr = String(error?.message || error || '').toLowerCase();
+      const status = error?.status || error?.code || error?.statusCode;
+      const isTransient =
+        status === 503 ||
+        status === 429 ||
+        status === 500 ||
+        errStr.includes('503') ||
+        errStr.includes('overloaded') ||
+        errStr.includes('unavailable') ||
+        errStr.includes('resource_exhausted') ||
+        errStr.includes('econnreset') ||
+        errStr.includes('etimedout');
+
+      if (isTransient && attempt <= maxRetries) {
+        const delay = baseDelayMs * Math.pow(2, attempt - 1);
+        console.warn(`[Gemini API] Transient error (${status || '503'}). Attempt ${attempt}/${maxRetries}. Retrying in ${delay}ms...`);
+        await new Promise((res) => setTimeout(res, delay));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+async function generateWithModelFallback(paramsBuilder: (model: string) => any, maxRetries = 2) {
+  let lastError: any;
+  for (const model of CANDIDATE_MODELS) {
+    try {
+      return await callGeminiWithRetry(() => ai.models.generateContent(paramsBuilder(model)), maxRetries);
+    } catch (err: any) {
+      lastError = err;
+      const errStr = String(err?.message || err || '').toLowerCase();
+      console.warn(`[Gemini] Model ${model} failed (${errStr.slice(0, 100)}). Trying fallback model...`);
+    }
+  }
+  throw lastError;
+}
 
 const SYSTEM_INSTRUCTION = `
 You are an expert assistant for Jehovah's Witnesses preparing for their weekly Watchtower study, acting also as an experienced Watchtower Study Conductor.
@@ -36,6 +84,18 @@ You can generate up to 3 suggested comments per paragraph (minimum of 1).
 - Only generate the maximum of 3 comments if the paragraph has sufficient information and scripture references to support multiple high-quality, distinct comments. Otherwise, provide fewer (1 or 2).
 The comments should sound natural, as if spoken by a person in a congregation meeting.
 Avoid overly long comments; aim for 2-3 sentences.
+
+MULTI-PARAGRAPH QUESTIONS & COMBINED PARAGRAPHS (CRITICAL):
+- In Watchtower study articles, questions frequently cover TWO (or more) consecutive paragraphs (e.g., questions numbered '1-2.', '1, 2.', '3-4.', '15, 16.', or questions with parts '(a)' and '(b)').
+- When a question covers multiple paragraphs (e.g. paragraphs 1 and 2):
+  * You MUST include the COMPLETE text of BOTH paragraphs together in the 'paragraph' field (e.g., "1. [Full text of paragraph 1]\n\n2. [Full text of paragraph 2]").
+  * NEVER skip or drop the first paragraph! Both paragraphs MUST be included in full.
+  * In the 'question' field, include the complete question text including all parts (e.g., "1-2. (a) What challenges do we face? (b) How do the Scriptures encourage us?").
+  * In 'suggestedComments', provide answers that cover both paragraphs and all sub-parts of the question.
+  * Extract all scriptures, cited verses, and conductor highlights from across BOTH paragraphs.
+- EXTRACT EVERY QUESTION WITHOUT EXCEPTION:
+  * Do not stop early or omit questions. Every single study question in the article (from Question 1 to the final question) must be represented as an item in the 'items' array.
+  * If a paragraph has no question directly under it, it belongs to the following multi-paragraph question (e.g., Paragraph 1 belongs with Paragraph 2 for Question 1-2). Combine it with that question!
 
 CONDUCTOR MODE ASSISTANCE:
 The study conductor's role during the meeting is to help get ALL the points out in each paragraph:
@@ -328,14 +388,27 @@ app.post('/api/gemini/process-article', async (req, res) => {
       return;
     }
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+    const response = await generateWithModelFallback((model) => ({
+      model,
       contents: [
         {
           role: 'user',
           parts: [
             {
-              text: `Parse the following Watchtower article text and generate suggested comments for each question based on its paragraph. Also include the full text of all cited scriptures using the NWT 2013 edition: \n\n${text}`,
+              text: `Parse the following Watchtower article text and extract ALL study questions and their corresponding paragraphs.
+
+CRITICAL EXTRACTION REQUIREMENTS:
+1. MULTI-PARAGRAPH QUESTIONS (e.g., questions numbered "1-2.", "1, 2.", "3-4.", "15-16.", or questions with parts (a) and (b)):
+   - When a question covers two or more paragraphs, you MUST include the COMPLETE text of ALL covered paragraphs combined into the "paragraph" field (e.g., "1. [Full paragraph 1 text]\n\n2. [Full paragraph 2 text]").
+   - NEVER drop or omit Paragraph 1 or any paragraph! Every paragraph and question in the article must be included.
+   - For questions with sub-parts like (a) and (b), ensure the suggested comments answer each part clearly.
+2. EXTRACT EVERY QUESTION:
+   - Extract and analyze every single study question from the beginning to the end of the article. Do not omit any question or stop prematurely.
+3. SCRIPTURES & CONDUCTOR HIGHLIGHTS:
+   - Extract all scriptures and conductor points across both paragraphs when combined. Include the full text of all cited scriptures using the NWT 2013 edition.
+
+Watchtower article text:
+\n\n${text}`,
             },
           ],
         },
@@ -343,6 +416,7 @@ app.post('/api/gemini/process-article', async (req, res) => {
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
         responseMimeType: 'application/json',
+        maxOutputTokens: 65536,
         responseSchema: {
           type: Type.OBJECT,
           properties: {
@@ -531,7 +605,7 @@ app.post('/api/gemini/process-article', async (req, res) => {
           required: ['title', 'items', 'reviewQuestions'],
         },
       },
-    });
+    }));
 
     const parsed = JSON.parse(response.text || '{}');
     if (parsed.items && Array.isArray(parsed.items)) {
@@ -540,7 +614,12 @@ app.post('/api/gemini/process-article', async (req, res) => {
     res.json({ ...parsed, originalText: text });
   } catch (error: any) {
     console.error('Error in /api/gemini/process-article:', error);
-    res.status(500).json({ error: error?.message || 'Failed to process article.' });
+    const msg = String(error?.message || '');
+    if (msg.includes('503') || msg.toLowerCase().includes('overloaded') || msg.toLowerCase().includes('unavailable')) {
+      res.status(503).json({ error: 'Google AI service is currently overloaded (503 Service Unavailable). Please wait a few seconds and try again.' });
+    } else {
+      res.status(500).json({ error: msg || 'Failed to process article.' });
+    }
   }
 });
 
@@ -559,46 +638,53 @@ app.post('/api/gemini/regenerate-comment', async (req, res) => {
       return;
     }
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            {
-              text: `Based on the following paragraph, generate a list of concise, meaningful, and faith-strengthening suggested comments for the question: "${question}"\n\nParagraph: ${paragraph}`,
-            },
-          ],
-        },
-      ],
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              comment: { type: Type.STRING, description: 'The text of the suggested comment' },
-              scriptureRef: {
-                type: Type.STRING,
-                description:
-                  "If this comment is scripture-focused, provide the exact scripture reference (e.g., 'Matthew 24:14') that this comment specifically incorporates and highlights. Otherwise, leave empty or omit.",
+    const response = await callGeminiWithRetry(() =>
+      ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: `Based on the following paragraph, generate a list of concise, meaningful, and faith-strengthening suggested comments for the question: "${question}"\n\nParagraph: ${paragraph}`,
               },
-            },
-            required: ['comment'],
+            ],
           },
-          description:
-            'A list of up to 3 suggested comments. Comment 1 should be a general response. Comments 2 & 3 should be distinct alternatives specifically incorporating/explaining any cited scriptures from the paragraph. If there is only one scripture or very little information, only generate 1 or 2 high-quality comments.',
+        ],
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                comment: { type: Type.STRING, description: 'The text of the suggested comment' },
+                scriptureRef: {
+                  type: Type.STRING,
+                  description:
+                    "If this comment is scripture-focused, provide the exact scripture reference (e.g., 'Matthew 24:14') that this comment specifically incorporates and highlights. Otherwise, leave empty or omit.",
+                },
+              },
+              required: ['comment'],
+            },
+            description:
+              'A list of up to 3 suggested comments. Comment 1 should be a general response. Comments 2 & 3 should be distinct alternatives specifically incorporating/explaining any cited scriptures from the paragraph. If there is only one scripture or very little information, only generate 1 or 2 high-quality comments.',
+          },
         },
-      },
-    });
+      })
+    );
 
     const comments = JSON.parse(response.text || '[]');
     res.json(Array.isArray(comments) && comments.length > 0 ? comments : [{ comment: 'Failed to generate comment.' }]);
   } catch (error: any) {
     console.error('Error in /api/gemini/regenerate-comment:', error);
-    res.status(500).json({ error: error?.message || 'Failed to regenerate comment.' });
+    const msg = String(error?.message || '');
+    if (msg.includes('503') || msg.toLowerCase().includes('overloaded') || msg.toLowerCase().includes('unavailable')) {
+      res.status(503).json({ error: 'Google AI service is temporarily overloaded (503). Please wait 5 seconds and click Regenerate again.' });
+    } else {
+      res.status(500).json({ error: msg || 'Failed to regenerate comment.' });
+    }
   }
 });
 
@@ -667,65 +753,67 @@ CONDUCTOR INSTRUCTIONS:
     }
     parts.push({ text: textPrompt });
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: [{ role: 'user', parts }],
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            hasPicture: { type: Type.BOOLEAN },
-            pictureDescription: { type: Type.STRING },
-            extraPoints: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  id: { type: Type.STRING },
-                  text: { type: Type.STRING, description: 'EXACT substring from the paragraph' },
-                  color: { type: Type.STRING, description: 'One of emerald, purple, amber, rose, cyan' },
-                  type: { type: Type.STRING, description: 'supporting, scripture_insight, application, or illustration' },
-                  label: { type: Type.STRING, description: 'Short label like Supporting Gem, Scripture Principle, Practical Application' },
-                  question: { type: Type.STRING, description: 'Conductor question to draw this point out' },
-                  scriptureRef: { type: Type.STRING },
+    const response = await callGeminiWithRetry(() =>
+      ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: [{ role: 'user', parts }],
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              hasPicture: { type: Type.BOOLEAN },
+              pictureDescription: { type: Type.STRING },
+              extraPoints: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    text: { type: Type.STRING, description: 'EXACT substring from the paragraph' },
+                    color: { type: Type.STRING, description: 'One of emerald, purple, amber, rose, cyan' },
+                    type: { type: Type.STRING, description: 'supporting, scripture_insight, application, or illustration' },
+                    label: { type: Type.STRING, description: 'Short label like Supporting Gem, Scripture Principle, Practical Application' },
+                    question: { type: Type.STRING, description: 'Conductor question to draw this point out' },
+                    scriptureRef: { type: Type.STRING },
+                  },
+                  required: ['id', 'text', 'color', 'label', 'question'],
                 },
-                required: ['id', 'text', 'color', 'label', 'question'],
+              },
+              scriptureQuestions: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    scriptureRef: { type: Type.STRING },
+                    question: { type: Type.STRING },
+                    purpose: { type: Type.STRING },
+                  },
+                  required: ['scriptureRef', 'question'],
+                },
+              },
+              pictureQuestions: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    question: { type: Type.STRING },
+                    focus: { type: Type.STRING },
+                  },
+                  required: ['question', 'focus'],
+                },
+              },
+              teachingTips: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
               },
             },
-            scriptureQuestions: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  scriptureRef: { type: Type.STRING },
-                  question: { type: Type.STRING },
-                  purpose: { type: Type.STRING },
-                },
-                required: ['scriptureRef', 'question'],
-              },
-            },
-            pictureQuestions: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  question: { type: Type.STRING },
-                  focus: { type: Type.STRING },
-                },
-                required: ['question', 'focus'],
-              },
-            },
-            teachingTips: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
+            required: ['extraPoints', 'scriptureQuestions', 'pictureQuestions'],
           },
-          required: ['extraPoints', 'scriptureQuestions', 'pictureQuestions'],
         },
-      },
-    });
+      })
+    );
 
     const parsed = JSON.parse(response.text || '{}');
     const dummyItem = {
@@ -739,7 +827,12 @@ CONDUCTOR INSTRUCTIONS:
     res.json(validated.conductorData);
   } catch (error: any) {
     console.error('Error in /api/gemini/conductor-analysis:', error);
-    res.status(500).json({ error: error?.message || 'Failed to generate conductor analysis.' });
+    const msg = String(error?.message || '');
+    if (msg.includes('503') || msg.toLowerCase().includes('overloaded') || msg.toLowerCase().includes('unavailable')) {
+      res.status(503).json({ error: 'Google AI service is temporarily overloaded (503). Please wait a few seconds and try again.' });
+    } else {
+      res.status(500).json({ error: msg || 'Failed to generate conductor analysis.' });
+    }
   }
 });
 
@@ -773,65 +866,67 @@ Read Scriptures: ${(it.readScriptures || []).join(', ')}
 
 Provide 2 to 4 distinct points with exact substrings from the paragraph, conductor follow-up questions, scripture questions, picture questions (if applicable), and conductor tips.`;
 
-          const response = await ai.models.generateContent({
-            model: 'gemini-3.8-flash',
-            contents: [{ role: 'user', parts: [{ text: textPrompt }] }],
-            config: {
-              systemInstruction: SYSTEM_INSTRUCTION,
-              responseMimeType: 'application/json',
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  hasPicture: { type: Type.BOOLEAN },
-                  pictureDescription: { type: Type.STRING },
-                  extraPoints: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        id: { type: Type.STRING },
-                        text: { type: Type.STRING },
-                        color: { type: Type.STRING },
-                        type: { type: Type.STRING },
-                        label: { type: Type.STRING },
-                        question: { type: Type.STRING },
-                        scriptureRef: { type: Type.STRING },
+          const response = await callGeminiWithRetry(() =>
+            ai.models.generateContent({
+              model: 'gemini-3.8-flash',
+              contents: [{ role: 'user', parts: [{ text: textPrompt }] }],
+              config: {
+                systemInstruction: SYSTEM_INSTRUCTION,
+                responseMimeType: 'application/json',
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    hasPicture: { type: Type.BOOLEAN },
+                    pictureDescription: { type: Type.STRING },
+                    extraPoints: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          id: { type: Type.STRING },
+                          text: { type: Type.STRING },
+                          color: { type: Type.STRING },
+                          type: { type: Type.STRING },
+                          label: { type: Type.STRING },
+                          question: { type: Type.STRING },
+                          scriptureRef: { type: Type.STRING },
+                        },
+                        required: ['id', 'text', 'color', 'label', 'question'],
                       },
-                      required: ['id', 'text', 'color', 'label', 'question'],
+                    },
+                    scriptureQuestions: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          scriptureRef: { type: Type.STRING },
+                          question: { type: Type.STRING },
+                          purpose: { type: Type.STRING },
+                        },
+                        required: ['scriptureRef', 'question'],
+                      },
+                    },
+                    pictureQuestions: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          question: { type: Type.STRING },
+                          focus: { type: Type.STRING },
+                        },
+                        required: ['question', 'focus'],
+                      },
+                    },
+                    teachingTips: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING },
                     },
                   },
-                  scriptureQuestions: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        scriptureRef: { type: Type.STRING },
-                        question: { type: Type.STRING },
-                        purpose: { type: Type.STRING },
-                      },
-                      required: ['scriptureRef', 'question'],
-                    },
-                  },
-                  pictureQuestions: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        question: { type: Type.STRING },
-                        focus: { type: Type.STRING },
-                      },
-                      required: ['question', 'focus'],
-                    },
-                  },
-                  teachingTips: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                  },
+                  required: ['extraPoints', 'scriptureQuestions', 'pictureQuestions'],
                 },
-                required: ['extraPoints', 'scriptureQuestions', 'pictureQuestions'],
               },
-            },
-          });
+            })
+          );
 
           const parsed = JSON.parse(response.text || '{}');
           const dummy = {
@@ -854,6 +949,21 @@ Provide 2 to 4 distinct points with exact substrings from the paragraph, conduct
     console.error('Error in /api/gemini/conductor-analysis-batch:', error);
     res.status(500).json({ error: error?.message || 'Failed to process batch conductor analysis.' });
   }
+});
+
+// Explicit catch-all for /api/* to NEVER let API requests fall through to Vite SPA html handler
+app.all('/api/*', (req, res) => {
+  res.status(404).json({
+    error: `API route not found: ${req.method} ${req.originalUrl}.`,
+  });
+});
+
+// Global Express JSON error handler to prevent HTML error responses
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('Express error:', err);
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal server error',
+  });
 });
 
 async function startServer() {

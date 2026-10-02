@@ -322,3 +322,34 @@ export function ensureArticleConductorData(article: WatchtowerArticle): Watchtow
     items: healedItems,
   };
 }
+
+/**
+ * Accurately extracts the paragraph number(s) from a question string, e.g. "1-2.", "1, 2.", "3.", "15-16."
+ * and returns a human-friendly label like "Paragraphs 1-2" or "Paragraph 3".
+ */
+export function getParagraphDisplayLabel(question: string, index: number): string {
+  if (!question) return `Paragraph ${index + 1}`;
+  const match = question.trim().match(/^(?:paragraphs?|questions?|pars?\.?|q\.?)?\s*(\d+(?:\s*[-–—,]\s*\d+)?)\s*[.)]/i);
+  if (match && match[1]) {
+    const raw = match[1].replace(/\s+/g, '');
+    if (/[-–—,]/.test(raw)) {
+      return `Paragraphs ${raw}`;
+    }
+    return `Paragraph ${raw}`;
+  }
+  return `Paragraph ${index + 1}`;
+}
+
+/**
+ * Extracts question number(s) from question string, e.g. "Question 1-2" or "Question 3".
+ */
+export function getQuestionDisplayLabel(question: string, index: number): string {
+  if (!question) return `Question ${index + 1}`;
+  const match = question.trim().match(/^(?:paragraphs?|questions?|pars?\.?|q\.?)?\s*(\d+(?:\s*[-–—,]\s*\d+)?)\s*[.)]/i);
+  if (match && match[1]) {
+    const raw = match[1].replace(/\s+/g, '');
+    return `Question ${raw}`;
+  }
+  return `Question ${index + 1}`;
+}
+

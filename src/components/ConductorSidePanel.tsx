@@ -30,7 +30,7 @@ import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { generateConductorAnalysis, generateConductorAnalysisBatch } from '../services/geminiService';
-import { ensureValidConductorData } from '../utils/conductorEngine';
+import { ensureValidConductorData, getParagraphDisplayLabel, getQuestionDisplayLabel } from '../utils/conductorEngine';
 import { processImageFile } from '../utils/imageUtils';
 import { cn } from '@/lib/utils';
 
@@ -1007,9 +1007,10 @@ export function ConductorSidePanel({
                 >
                   {studyItems.map((item, idx) => {
                     const count = item.conductorData?.extraPoints?.length || 0;
+                    const label = getParagraphDisplayLabel(item.question, idx);
                     return (
                       <option key={item.id || idx} value={idx}>
-                        Para {idx + 1} ({count} pts){item.subheading ? ` - ${item.subheading.substring(0, 16)}` : ''}
+                        {label} ({count} pts){item.subheading ? ` - ${item.subheading.substring(0, 16)}` : ''}
                       </option>
                     );
                   })}
@@ -1028,7 +1029,7 @@ export function ConductorSidePanel({
               </div>
 
               <div className="text-[11px] text-muted-foreground font-medium truncate max-w-[150px] text-right">
-                {currentItem.subheading || `Question ${activeItemIndex + 1}`}
+                {currentItem.subheading || getQuestionDisplayLabel(currentItem.question, activeItemIndex)}
               </div>
             </div>
 
@@ -1037,6 +1038,9 @@ export function ConductorSidePanel({
               {studyItems.map((item, idx) => {
                 const isActive = idx === activeItemIndex;
                 const ptCount = item.conductorData?.extraPoints?.length || 0;
+                const match = item.question?.trim().match(/^(?:paragraphs?|questions?|pars?\.?|q\.?)?\s*(\d+(?:\s*[-–—,]\s*\d+)?)\s*[.)]/i);
+                const pillLabel = match ? match[1].replace(/\s+/g, '') : `${idx + 1}`;
+                const label = getParagraphDisplayLabel(item.question, idx);
                 return (
                   <button
                     key={item.id || idx}
@@ -1049,9 +1053,9 @@ export function ConductorSidePanel({
                           ? "bg-card text-foreground/80 hover:bg-muted border-border hover:border-amber-500/50"
                           : "bg-muted/30 text-muted-foreground border-dashed border-border"
                     )}
-                    title={`Paragraph ${idx + 1}: ${ptCount} points • "${item.question.substring(0, 40)}..."`}
+                    title={`${label}: ${ptCount} points • "${item.question.substring(0, 40)}..."`}
                   >
-                    <span>{idx + 1}</span>
+                    <span>{pillLabel}</span>
                     <span className={cn(
                       "w-1.5 h-1.5 rounded-full",
                       isActive ? "bg-white" : ptCount > 0 ? "bg-emerald-500" : "bg-muted-foreground/40"
@@ -1219,8 +1223,8 @@ export function ConductorSidePanel({
           </Button>
 
           <div className="flex items-center gap-2">
-            <span className="text-muted-foreground font-medium">
-              {activeItemIndex + 1} / {studyItems.length}
+            <span className="text-muted-foreground font-medium text-xs">
+              {getParagraphDisplayLabel(currentItem?.question || '', activeItemIndex)} ({activeItemIndex + 1}/{studyItems.length})
             </span>
             {onOpenExportModal && (
               <Button

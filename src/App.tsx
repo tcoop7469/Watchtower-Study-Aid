@@ -40,7 +40,8 @@ import {
   Calendar,
   Users,
   Printer,
-  FileCode
+  FileCode,
+  AlertCircle
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -54,7 +55,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { processArticle, regenerateComment } from "./services/geminiService";
 import { WatchtowerArticle, StudyItem, SuggestedCommentOption, ConductorData, ConductorPointColor, ConductorPoint } from "./types";
 import { ConductorSidePanel, COLOR_CONFIG } from "./components/ConductorSidePanel";
-import { ensureArticleConductorData, splitParagraphIntoSentences } from "./utils/conductorEngine";
+import { ensureArticleConductorData, splitParagraphIntoSentences, getParagraphDisplayLabel, getQuestionDisplayLabel } from "./utils/conductorEngine";
 import { ImageReferenceNote } from "./components/ImageReferenceNote";
 import { processImageFile } from "./utils/imageUtils";
 import { cn } from "@/lib/utils";
@@ -275,7 +276,7 @@ export default function App() {
   const copyAllComments = () => {
     if (!article) return;
     const allComments = article.items
-      .map((item, index) => `Question ${index + 1}: ${item.question}\nComment: ${item.userComment}`)
+      .map((item, index) => `${getQuestionDisplayLabel(item.question, index)}: ${item.question}\nComment: ${item.userComment}`)
       .join("\n\n");
     navigator.clipboard.writeText(allComments);
     setCopiedId("all");
@@ -289,12 +290,12 @@ export default function App() {
     output += `================================================================================\n`;
     output += `Article: ${art.title || "Untitled Article"}\n`;
     output += `Study Date: ${dateStr}\n`;
-    output += `Total Paragraphs: ${art.items.length}\n`;
+    output += `Total Questions: ${art.items.length}\n`;
     output += `Exported: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}\n\n`;
 
     art.items.forEach((item, index) => {
       output += `--------------------------------------------------------------------------------\n`;
-      output += `PARAGRAPH ${index + 1}${item.subheading ? ` - [${item.subheading}]` : ''}\n`;
+      output += `${getParagraphDisplayLabel(item.question, index).toUpperCase()}${item.subheading ? ` - [${item.subheading}]` : ''}\n`;
       output += `--------------------------------------------------------------------------------\n`;
       output += `Question: ${item.question}\n\n`;
       if (item.highlightedText) {
@@ -586,7 +587,7 @@ export default function App() {
       const conductor = item.conductorData;
       html += `  <div class="paragraph-card">
     <div class="paragraph-title">
-      <span>Paragraph ${index + 1}</span>
+      <span>${getParagraphDisplayLabel(item.question, index)}</span>
       ${item.subheading ? `<span style="font-size: 13px; font-weight: normal; color: #64748b;">${item.subheading}</span>` : ''}
     </div>
     <div class="main-question">${item.question}</div>
@@ -700,7 +701,7 @@ export default function App() {
     md += `---\n\n`;
 
     art.items.forEach((item, index) => {
-      md += `## Paragraph ${index + 1}${item.subheading ? ` - ${item.subheading}` : ''}\n\n`;
+      md += `## ${getParagraphDisplayLabel(item.question, index)}${item.subheading ? ` - ${item.subheading}` : ''}\n\n`;
       md += `**Question:** ${item.question}\n\n`;
       if (item.highlightedText) {
         md += `> **Basis in text:** "${item.highlightedText}"\n\n`;
@@ -881,7 +882,7 @@ export default function App() {
     text += `Study Date: ${articleDate || article.studyDate || 'N/A'}\n`;
     text += `================================================================================\n\n`;
     article.items.forEach((item, index) => {
-      text += `Question ${index + 1}: ${item.question}\n`;
+      text += `${getQuestionDisplayLabel(item.question, index)}: ${item.question}\n`;
       if (item.highlightedText) text += `Basis: "${item.highlightedText}"\n`;
       text += `My Comment: ${item.userComment || '(No comment written yet)'}\n`;
       
@@ -2020,9 +2021,22 @@ export default function App() {
                   </div>
                   
                   {error && (
-                    <div className="p-4 rounded-lg bg-destructive/10 text-destructive text-sm flex items-center gap-3">
-                      <Trash2 size={16} />
-                      {error}
+                    <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-900 dark:text-amber-200 text-sm flex flex-col gap-2">
+                      <div className="flex items-center gap-2 font-semibold text-amber-800 dark:text-amber-300">
+                        <AlertCircle size={16} className="shrink-0 text-amber-600 dark:text-amber-400" />
+                        <span>Notice</span>
+                      </div>
+                      <p className="text-xs leading-relaxed text-muted-foreground">{error}</p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="self-start h-7 text-xs border-amber-500/40 text-amber-800 dark:text-amber-200 hover:bg-amber-500/15"
+                        onClick={handleImport}
+                        disabled={isLoading || !inputText.trim()}
+                      >
+                        <RefreshCw size={12} className={cn("mr-1.5", isLoading && "animate-spin")} />
+                        Try Again
+                      </Button>
                     </div>
                   )}
 
@@ -2147,7 +2161,7 @@ export default function App() {
                         <CardHeader className="pb-3">
                           <div className="flex items-start justify-between gap-4">
                             <div className="space-y-1">
-                              <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Question {index + 1}</span>
+                              <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">{getParagraphDisplayLabel(item.question, index)}</span>
                               <CardTitle className="text-lg font-medium leading-snug">{item.question}</CardTitle>
                             </div>
                             <div className="flex items-center gap-1.5 shrink-0">
@@ -2677,7 +2691,7 @@ export default function App() {
                           {article?.items.map((item, index) => (
                             <div key={`scripture-group-${item.id}`} className="space-y-4">
                               <div className="flex items-center gap-2">
-                                <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground bg-muted px-2 py-1 rounded">Paragraph {index + 1}</span>
+                                <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground bg-muted px-2 py-1 rounded">{getParagraphDisplayLabel(item.question, index)}</span>
                                 <Separator className="flex-1" />
                               </div>
                               <div className="space-y-4 pl-4 border-l-2 border-primary/20">
